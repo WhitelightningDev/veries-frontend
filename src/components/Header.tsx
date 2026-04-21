@@ -1,5 +1,4 @@
 import { Link } from '@tanstack/react-router'
-import TanChatAIAssistant from './demo-AIAssistant.tsx'
 import ThemeToggle from './ThemeToggle'
 
 export default function Header() {
@@ -45,7 +44,6 @@ export default function Header() {
               />
             </svg>
           </a>
-          <TanChatAIAssistant />
 
           <ThemeToggle />
         </div>
@@ -65,6 +63,13 @@ export default function Header() {
           >
             About
           </Link>
+          <Link
+            to="/verify"
+            className="nav-link"
+            activeProps={{ className: 'nav-link is-active' }}
+          >
+            Verify
+          </Link>
           <a
             href="https://tanstack.com/start/latest/docs/framework/react/overview"
             className="nav-link"
@@ -73,37 +78,6 @@ export default function Header() {
           >
             Docs
           </a>
-          <details className="relative w-full sm:w-auto">
-            <summary className="nav-link list-none cursor-pointer">
-              Demos
-            </summary>
-            <div className="mt-2 min-w-56 rounded-xl border border-[var(--line)] bg-[var(--header-bg)] p-2 shadow-lg sm:absolute sm:right-0">
-              <a
-                href="/demo/ai-chat"
-                className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
-              >
-                Chat
-              </a>
-              <a
-                href="/demo/ai-image"
-                className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
-              >
-                Generate Image
-              </a>
-              <a
-                href="/demo/ai-structured"
-                className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
-              >
-                Structured Output
-              </a>
-              <a
-                href="/demo/store"
-                className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
-              >
-                Store
-              </a>
-            </div>
-          </details>
         </div>
       </nav>
     </header>

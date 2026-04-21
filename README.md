@@ -18,12 +18,7 @@ npm run build
 ```
 
 ## Testing
-
-This project uses [Vitest](https://vitest.dev/) for testing. You can run the tests with:
-
-```bash
-npm run test
-```
+This project does not include a test suite.
 
 ## Styling
 
@@ -33,13 +28,12 @@ This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.
 
 If you prefer not to use Tailwind CSS:
 
-1. Remove the demo pages in `src/routes/demo/`
+1. Remove any Tailwind-based route/pages you don't need
 2. Replace the Tailwind import in `src/styles.css` with your own styles
 3. Remove `tailwindcss()` from the plugins array in `vite.config.ts`
 4. Uninstall the packages: `npm install @tailwindcss/vite tailwindcss -D`
 
 ## Linting & Formatting
-
 
 This project uses [eslint](https://eslint.org/) and [prettier](https://prettier.io/) for linting and formatting. Eslint is configured using [tanstack/eslint-config](https://tanstack.com/config/latest/docs/eslint). The following scripts are available:
 
@@ -57,45 +51,6 @@ Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
 ```bash
 pnpm dlx shadcn@latest add button
 ```
-
-
-# TanStack Chat Application
-
-Am example chat application built with TanStack Start, TanStack Store, and Claude AI.
-
-## .env Updates
-
-```env
-ANTHROPIC_API_KEY=your_anthropic_api_key
-```
-
-## ✨ Features
-
-### AI Capabilities
-- 🤖 Powered by Claude 3.5 Sonnet 
-- 📝 Rich markdown formatting with syntax highlighting
-- 🎯 Customizable system prompts for tailored AI behavior
-- 🔄 Real-time message updates and streaming responses (coming soon)
-
-### User Experience
-- 🎨 Modern UI with Tailwind CSS and Lucide icons
-- 🔍 Conversation management and history
-- 🔐 Secure API key management
-- 📋 Markdown rendering with code highlighting
-
-### Technical Features
-- 📦 Centralized state management with TanStack Store
-- 🔌 Extensible architecture for multiple AI providers
-- 🛠️ TypeScript for type safety
-
-## Architecture
-
-### Tech Stack
-- **Frontend Framework**: TanStack Start
-- **Routing**: TanStack Router
-- **State Management**: TanStack Store
-- **Styling**: Tailwind CSS
-- **AI Integration**: Anthropic's Claude API
 
 
 ## Routing
