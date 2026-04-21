@@ -40,6 +40,34 @@ const OVERLAY_GEOMETRY = {
   },
 } as const
 
+const DOCUMENT_TARGET_ASPECT =
+  OVERLAY_GEOMETRY.document.crop.width / OVERLAY_GEOMETRY.document.crop.height
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t
+}
+
+function rectLerp(a: CropRect, b: CropRect, t: number): CropRect {
+  return {
+    x: lerp(a.x, b.x, t),
+    y: lerp(a.y, b.y, t),
+    width: lerp(a.width, b.width, t),
+    height: lerp(a.height, b.height, t),
+  }
+}
+
+function normalizeRect(rect: CropRect): CropRect {
+  const x = clamp(rect.x, 0, 1)
+  const y = clamp(rect.y, 0, 1)
+  const width = clamp(rect.width, 0.05, 1 - x)
+  const height = clamp(rect.height, 0.05, 1 - y)
+  return { x, y, width, height }
+}
+
 function getErrorMessage(error: unknown) {
   if (error && typeof error === 'object' && 'name' in error) {
     const name = String((error as { name?: unknown }).name)
@@ -95,12 +123,18 @@ export default function CameraVerifier({
   const streamRef = useRef<MediaStream | null>(null)
   const faceFileInputRef = useRef<HTMLInputElement | null>(null)
   const documentFileInputRef = useRef<HTMLInputElement | null>(null)
+  const documentDetectCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const sessionIdRef = useRef<string>(createSessionId())
 
   const [step, setStep] = useState<FlowStep>('document_live')
   const [faceDataUrl, setFaceDataUrl] = useState<string | null>(null)
   const [documentDataUrl, setDocumentDataUrl] = useState<string | null>(null)
+  const [documentDetectRect, setDocumentDetectRect] = useState<CropRect | null>(
+    null,
+  )
+  const documentDetectRectRef = useRef<CropRect | null>(null)
+  const documentDetectConfidenceRef = useRef<number>(0)
 
   const mode: CaptureMode =
     step === 'face_live' || step === 'face_preview' ? 'face' : 'document'
@@ -500,7 +534,10 @@ export default function CameraVerifier({
     const height = video.videoHeight
     if (!width || !height) return null
 
-    const crop = mode === 'document' ? OVERLAY_GEOMETRY.document.crop : null
+    const crop =
+      mode === 'document'
+        ? (documentDetectRectRef.current ?? OVERLAY_GEOMETRY.document.crop)
+        : null
     const sx = crop ? Math.round(crop.x * width) : 0
     const sy = crop ? Math.round(crop.y * height) : 0
     const sw = crop ? Math.round(crop.width * width) : width
@@ -578,12 +615,222 @@ export default function CameraVerifier({
 
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (!documentDetectCanvasRef.current) {
+      documentDetectCanvasRef.current = document.createElement('canvas')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
     void fetch('/api/verify/session', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ session_id: sessionIdRef.current }),
     }).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (
+      step !== 'document_live' ||
+      cameraState.status !== 'ready' ||
+      mode !== 'document'
+    ) {
+      documentDetectConfidenceRef.current = 0
+      documentDetectRectRef.current = null
+      setDocumentDetectRect(null)
+      return
+    }
+
+    const canvas = documentDetectCanvasRef.current
+    const video = videoRef.current
+    if (!canvas || !video) return
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return
+
+    const scanWidth = 320
+    const scanHeight = 240
+    canvas.width = scanWidth
+    canvas.height = scanHeight
+
+    let lastRect: CropRect | null = null
+    let lastUpdateAt = 0
+    let stableFrames = 0
+
+    const scanOnce = () => {
+      if (!video.videoWidth || !video.videoHeight) return
+
+      ctx.drawImage(video, 0, 0, scanWidth, scanHeight)
+      const image = ctx.getImageData(0, 0, scanWidth, scanHeight)
+      const data = image.data
+
+      const gray = new Uint8ClampedArray(scanWidth * scanHeight)
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        gray[p] =
+          (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0
+      }
+
+      const colSum = new Float32Array(scanWidth)
+      const rowSum = new Float32Array(scanHeight)
+
+      const yBandStart = Math.floor(scanHeight * 0.22)
+      const yBandEnd = Math.floor(scanHeight * 0.86)
+      const xBandStart = Math.floor(scanWidth * 0.1)
+      const xBandEnd = Math.floor(scanWidth * 0.9)
+
+      for (let y = 1; y < scanHeight - 1; y++) {
+        const yOffset = y * scanWidth
+        for (let x = 1; x < scanWidth - 1; x++) {
+          const idx = yOffset + x
+          const v = Math.abs(gray[idx + 1] - gray[idx - 1])
+          const h = Math.abs(gray[idx + scanWidth] - gray[idx - scanWidth])
+          const mag = v + h
+
+          if (y >= yBandStart && y <= yBandEnd) {
+            colSum[x] += v
+          }
+          if (x >= xBandStart && x <= xBandEnd) {
+            rowSum[y] += h
+          }
+        }
+      }
+
+      const argmax = (arr: Float32Array, start: number, end: number) => {
+        let best = start
+        let bestVal = -Infinity
+        for (let i = start; i <= end; i++) {
+          const val = arr[i]
+          if (val > bestVal) {
+            bestVal = val
+            best = i
+          }
+        }
+        return { index: best, value: bestVal }
+      }
+
+      const mean = (arr: Float32Array) => {
+        let sum = 0
+        for (const value of arr) sum += value
+        return sum / arr.length
+      }
+
+      const meanCol = Math.max(1, mean(colSum))
+      const meanRow = Math.max(1, mean(rowSum))
+
+      const left = argmax(
+        colSum,
+        Math.floor(scanWidth * 0.06),
+        Math.floor(scanWidth * 0.44),
+      )
+      const right = argmax(
+        colSum,
+        Math.floor(scanWidth * 0.56),
+        Math.floor(scanWidth * 0.94),
+      )
+      const top = argmax(
+        rowSum,
+        Math.floor(scanHeight * 0.12),
+        Math.floor(scanHeight * 0.5),
+      )
+      const bottom = argmax(
+        rowSum,
+        Math.floor(scanHeight * 0.55),
+        Math.floor(scanHeight * 0.96),
+      )
+
+      const widthPx = right.index - left.index
+      const heightPx = bottom.index - top.index
+      if (widthPx < scanWidth * 0.35 || heightPx < scanHeight * 0.2) {
+        documentDetectConfidenceRef.current = Math.max(
+          0,
+          documentDetectConfidenceRef.current - 0.08,
+        )
+        stableFrames = 0
+        return
+      }
+
+      const raw: CropRect = {
+        x: left.index / scanWidth,
+        y: top.index / scanHeight,
+        width: widthPx / scanWidth,
+        height: heightPx / scanHeight,
+      }
+
+      const aspect = raw.width / Math.max(1e-6, raw.height)
+      const aspectScore = clamp(
+        Math.min(
+          aspect / DOCUMENT_TARGET_ASPECT,
+          DOCUMENT_TARGET_ASPECT / aspect,
+        ),
+        0,
+        1,
+      )
+
+      const edgeScore =
+        (left.value / meanCol +
+          right.value / meanCol +
+          top.value / meanRow +
+          bottom.value / meanRow) /
+        4
+
+      const confidence = clamp(((edgeScore - 2.2) / 2.4) * aspectScore, 0, 1)
+      documentDetectConfidenceRef.current = confidence
+
+      if (confidence < 0.45) {
+        stableFrames = 0
+        return
+      }
+
+      // Pad a touch outward and enforce target aspect ratio around center.
+      const pad = 0.02
+      let rect = normalizeRect({
+        x: raw.x - pad,
+        y: raw.y - pad,
+        width: raw.width + pad * 2,
+        height: raw.height + pad * 2,
+      })
+
+      const cx = rect.x + rect.width / 2
+      const cy = rect.y + rect.height / 2
+      const desiredHeight = rect.width / DOCUMENT_TARGET_ASPECT
+      if (Math.abs(desiredHeight - rect.height) / rect.height > 0.08) {
+        rect = normalizeRect({
+          x: rect.x,
+          y: cy - desiredHeight / 2,
+          width: rect.width,
+          height: desiredHeight,
+        })
+      }
+
+      if (lastRect) {
+        const dx = Math.abs(rect.x - lastRect.x) + Math.abs(rect.y - lastRect.y)
+        const ds =
+          Math.abs(rect.width - lastRect.width) +
+          Math.abs(rect.height - lastRect.height)
+        if (dx + ds < 0.03) {
+          stableFrames = Math.min(6, stableFrames + 1)
+        } else {
+          stableFrames = Math.max(0, stableFrames - 1)
+        }
+      } else {
+        stableFrames = 1
+      }
+
+      const alpha = stableFrames >= 3 ? 0.35 : 0.22
+      lastRect = lastRect ? rectLerp(lastRect, rect, alpha) : rect
+      documentDetectRectRef.current = lastRect
+
+      const now = Date.now()
+      if (now - lastUpdateAt > 220) {
+        lastUpdateAt = now
+        setDocumentDetectRect(lastRect)
+      }
+    }
+
+    const id = window.setInterval(scanOnce, 220)
+    return () => window.clearInterval(id)
+  }, [cameraState.status, mode, step])
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return
@@ -1091,7 +1338,7 @@ export default function CameraVerifier({
                 )}
 
                 {step === 'face_live' || step === 'document_live' ? (
-                  <Overlay mode={mode} />
+                  <Overlay mode={mode} documentRect={documentDetectRect} />
                 ) : null}
 
                 <div className="absolute left-4 top-4 rounded-full border border-[rgba(255,255,255,0.25)] bg-[rgba(15,27,31,0.55)] px-3 py-1.5 text-xs font-semibold tracking-wide text-white">
@@ -1264,8 +1511,22 @@ export default function CameraVerifier({
   )
 }
 
-function Overlay({ mode }: { mode: CaptureMode }) {
-  const documentCutout = OVERLAY_GEOMETRY.document.cutout
+function Overlay({
+  mode,
+  documentRect,
+}: {
+  mode: CaptureMode
+  documentRect?: CropRect | null
+}) {
+  const documentCutout = documentRect
+    ? {
+        x: documentRect.x * 100,
+        y: documentRect.y * 100,
+        width: documentRect.width * 100,
+        height: documentRect.height * 100,
+        radius: OVERLAY_GEOMETRY.document.cutout.radius,
+      }
+    : OVERLAY_GEOMETRY.document.cutout
   const faceOverlay = OVERLAY_GEOMETRY.face
 
   const documentPath = `M${documentCutout.x},${documentCutout.y} h${documentCutout.width} v${documentCutout.height} h-${documentCutout.width} Z`
@@ -1387,9 +1648,9 @@ function Overlay({ mode }: { mode: CaptureMode }) {
                 dirY: -1,
               },
             ] as const
-          ).map((c) => (
+          ).map((c, index) => (
             <path
-              key={`${c.x}-${c.y}`}
+              key={index}
               d={`M${c.x},${c.y} h${corner * c.dirX} M${c.x},${c.y} v${corner * c.dirY}`}
               stroke="var(--lagoon)"
               strokeOpacity="0.95"
