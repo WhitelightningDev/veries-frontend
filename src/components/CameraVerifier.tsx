@@ -636,7 +636,7 @@ export default function CameraVerifier({
     step === 'face_live' || step === 'document_live' ? 'Capture' : null
 
   return (
-    <section className="island-shell rise-in rounded-3xl p-5 sm:p-7">
+    <section className="island-shell rise-in rounded-2xl p-5 sm:p-7">
       <input
         ref={documentFileInputRef}
         type="file"
@@ -679,7 +679,7 @@ export default function CameraVerifier({
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold text-[var(--sea-ink-soft)]">
             {recordingState.status === 'recording' ? (
               <span className="inline-flex items-center gap-2 rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1">
-                <span className="h-2 w-2 rounded-full bg-[linear-gradient(90deg,#56c6be,#7ed3bf)]" />
+                <span className="h-2 w-2 rounded-full bg-[linear-gradient(90deg,#0078ff,#75b5ff)]" />
                 Background recording on
                 <span className="text-[var(--sea-ink-soft)]/70">
                   •{' '}
@@ -712,7 +712,7 @@ export default function CameraVerifier({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] p-1 shadow-[0_8px_18px_rgba(30,90,72,0.08)]">
+          <div className="flex rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] p-1 shadow-[0_8px_18px_var(--shadow-soft)]">
             <button
               type="button"
               onClick={() =>
@@ -765,7 +765,7 @@ export default function CameraVerifier({
                 void stopCamera()
                 openUploadPicker(mode)
               }}
-              className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)]"
+              className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
             >
               Upload photo
             </button>
@@ -787,7 +787,7 @@ export default function CameraVerifier({
                 setStep('document_live')
                 trackEvent('session_restart')
               }}
-              className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
+              className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5"
             >
               Start new
             </button>
@@ -797,7 +797,7 @@ export default function CameraVerifier({
                 type="button"
                 onClick={() => setStep('document_preview')}
                 disabled={!documentComplete}
-                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)] disabled:opacity-50"
+                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)] disabled:opacity-50"
               >
                 Edit document
               </button>
@@ -805,7 +805,7 @@ export default function CameraVerifier({
                 type="button"
                 onClick={() => setStep('face_preview')}
                 disabled={!faceComplete}
-                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)] disabled:opacity-50"
+                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)] disabled:opacity-50"
               >
                 Edit selfie
               </button>
@@ -844,7 +844,7 @@ export default function CameraVerifier({
                   }
                 }}
                 disabled={!reviewReady || submitState.status === 'submitting'}
-                className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5 disabled:opacity-60"
+                className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5 disabled:opacity-60"
               >
                 {submitState.status === 'submitting' ? 'Uploading…' : 'Confirm'}
               </button>
@@ -860,14 +860,14 @@ export default function CameraVerifier({
                     ? 'Switch camera'
                     : 'This device only reports one camera.'
                 }
-                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)] disabled:opacity-50"
+                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)] disabled:opacity-50"
               >
                 Flip camera
               </button>
               <button
                 type="button"
                 onClick={stopCamera}
-                className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)]"
+                className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
               >
                 Stop
               </button>
@@ -895,7 +895,7 @@ export default function CameraVerifier({
                     setStep('document_preview')
                     trackEvent('document_captured')
                   }}
-                  className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
+                  className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5"
                 >
                   {primaryActionLabel}
                 </button>
@@ -906,7 +906,7 @@ export default function CameraVerifier({
               type="button"
               onClick={() => startCamera()}
               disabled={cameraState.status === 'starting'}
-              className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5 disabled:opacity-60"
+              className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5 disabled:opacity-60"
             >
               {cameraState.status === 'starting' ? 'Starting…' : 'Start camera'}
             </button>
@@ -922,7 +922,7 @@ export default function CameraVerifier({
           onEditDocument={() => setStep('document_preview')}
         />
       ) : step === 'success' ? (
-        <div className="mt-6 rounded-3xl border border-[var(--line)] bg-white/50 p-6 text-[var(--sea-ink-soft)]">
+        <div className="mt-6 rounded-2xl border border-[var(--line)] bg-white/50 p-6 text-[var(--sea-ink-soft)]">
           <p className="island-kicker mb-2">Success</p>
           <p className="m-0 text-sm">
             Session{' '}
@@ -935,7 +935,7 @@ export default function CameraVerifier({
         </div>
       ) : (
         <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="relative overflow-hidden rounded-3xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)] shadow-[0_18px_44px_rgba(23,58,64,0.12)]">
+          <div className="relative overflow-hidden rounded-2xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)] shadow-[0_18px_44px_var(--shadow-deep)]">
             <div className="relative" style={{ aspectRatio: '4 / 5' }}>
               {step === 'face_preview' && faceDataUrl ? (
                 <img
@@ -1005,7 +1005,7 @@ export default function CameraVerifier({
             </div>
           </div>
 
-          <aside className="island-shell rounded-3xl p-5">
+          <aside className="island-shell rounded-2xl p-5">
             <p className="island-kicker mb-2">On-screen guidance</p>
             <h2 className="m-0 text-lg font-semibold text-[var(--sea-ink)]">
               {mode === 'face' ? 'Face + ID check' : 'Document clarity check'}
@@ -1041,7 +1041,7 @@ export default function CameraVerifier({
                       }
                     }
                   }}
-                  className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)]"
+                  className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
                 >
                   Retake
                 </button>
@@ -1061,7 +1061,7 @@ export default function CameraVerifier({
                     trackEvent('face_confirmed')
                     setStep('review')
                   }}
-                  className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
+                  className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5"
                 >
                   {step === 'document_preview'
                     ? 'Use document photo'
@@ -1120,7 +1120,8 @@ function Overlay({ mode }: { mode: CaptureMode }) {
             rx="22"
             ry="28"
             fill="transparent"
-            stroke="rgba(126,211,191,0.95)"
+            stroke="var(--lagoon)"
+            strokeOpacity="0.95"
             strokeWidth="1.5"
           />
           <rect
@@ -1130,7 +1131,8 @@ function Overlay({ mode }: { mode: CaptureMode }) {
             height="20"
             rx="4"
             fill="transparent"
-            stroke="rgba(126,211,191,0.95)"
+            stroke="var(--lagoon)"
+            strokeOpacity="0.95"
             strokeWidth="1.2"
             strokeDasharray="3 2"
           />
@@ -1143,7 +1145,8 @@ function Overlay({ mode }: { mode: CaptureMode }) {
           height="56"
           rx="6"
           fill="transparent"
-          stroke="rgba(126,211,191,0.95)"
+          stroke="var(--lagoon)"
+          strokeOpacity="0.95"
           strokeWidth="1.5"
         />
       )}
@@ -1164,7 +1167,7 @@ function ReviewScreen({
 }) {
   return (
     <div className="mt-6 grid gap-5 lg:grid-cols-2">
-      <div className="island-shell rounded-3xl p-5">
+      <div className="island-shell rounded-2xl p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="island-kicker mb-1">Face</p>
@@ -1175,12 +1178,12 @@ function ReviewScreen({
           <button
             type="button"
             onClick={onEditFace}
-            className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)]"
+            className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
           >
             Edit
           </button>
         </div>
-        <div className="mt-4 overflow-hidden rounded-3xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)]">
+        <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)]">
           <div className="relative" style={{ aspectRatio: '4 / 5' }}>
             {faceDataUrl ? (
               <img
@@ -1197,7 +1200,7 @@ function ReviewScreen({
         </div>
       </div>
 
-      <div className="island-shell rounded-3xl p-5">
+      <div className="island-shell rounded-2xl p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="island-kicker mb-1">Document</p>
@@ -1208,12 +1211,12 @@ function ReviewScreen({
           <button
             type="button"
             onClick={onEditDocument}
-            className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)]"
+            className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
           >
             Edit
           </button>
         </div>
-        <div className="mt-4 overflow-hidden rounded-3xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)]">
+        <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)]">
           <div className="relative" style={{ aspectRatio: '4 / 5' }}>
             {documentDataUrl ? (
               <img
