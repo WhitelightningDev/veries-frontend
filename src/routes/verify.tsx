@@ -51,6 +51,14 @@ function VerifyRoute() {
             const text = await res.text().catch(() => '')
             throw new Error(text || 'Upload failed.')
           }
+
+          const payload = (await res.json().catch(() => null)) as
+            | { ok?: boolean; error?: string }
+            | null
+
+          if (payload && payload.ok === false) {
+            throw new Error(payload.error || 'Upload failed.')
+          }
         }}
       />
     </main>

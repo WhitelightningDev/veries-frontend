@@ -8,6 +8,7 @@ type FlowStep =
   | 'document_live'
   | 'document_preview'
   | 'review'
+  | 'success'
 
 type CameraState =
   | { status: 'idle' }
@@ -444,6 +445,15 @@ export default function CameraVerifier({
   }, [])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    void fetch('/api/verify/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionIdRef.current }),
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     if (cameraState.status !== 'ready') return
     if (step === 'face_live' && facingMode !== 'user') {
       void flipCamera()
@@ -509,11 +519,17 @@ export default function CameraVerifier({
         <div>
           <p className="island-kicker mb-2">Camera verification</p>
           <h1 className="display-title m-0 text-3xl font-bold text-[var(--sea-ink)] sm:text-4xl">
-            {step === 'review' ? 'Final review' : title}
+            {step === 'review'
+              ? 'Final review'
+              : step === 'success'
+                ? 'Submitted'
+                : title}
           </h1>
           <p className="mt-2 mb-0 max-w-2xl text-sm text-[var(--sea-ink-soft)] sm:text-base">
             {step === 'review'
               ? 'Confirm both images before submission.'
+              : step === 'success'
+                ? 'Verification assets uploaded successfully.'
               : subtitle}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold text-[var(--sea-ink-soft)]">
@@ -589,7 +605,26 @@ export default function CameraVerifier({
             </button>
           </div>
 
-          {step === 'review' ? (
+          {step === 'success' ? (
+            <button
+              type="button"
+              onClick={async () => {
+                await stopCamera()
+                sessionIdRef.current = createSessionId()
+                recordedBlobRef.current = null
+                recordingChunksRef.current = []
+                recorderRef.current = null
+                setRecordingState({ status: 'idle' })
+                setSubmitState({ status: 'idle' })
+                setFaceDataUrl(null)
+                setDocumentDataUrl(null)
+                setStep('face_live')
+              }}
+              className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
+            >
+              Start new
+            </button>
+          ) : step === 'review' ? (
             <>
               <button
                 type="button"
@@ -622,6 +657,7 @@ export default function CameraVerifier({
                     })
                     setSubmitState({ status: 'submitted' })
                     await stopCamera()
+                    setStep('success')
                   } catch (error) {
                     setSubmitState({
                       status: 'error',
@@ -709,6 +745,16 @@ export default function CameraVerifier({
           onEditFace={() => setStep('face_preview')}
           onEditDocument={() => setStep('document_preview')}
         />
+      ) : step === 'success' ? (
+        <div className="mt-6 rounded-3xl border border-[var(--line)] bg-white/50 p-6 text-[var(--sea-ink-soft)]">
+          <p className="island-kicker mb-2">Success</p>
+          <p className="m-0 text-sm">
+            Session <span className="font-semibold text-[var(--sea-ink)]">{sessionIdRef.current}</span> is marked as submitted.
+          </p>
+          <p className="mt-2 mb-0 text-sm">
+            You can safely close this page.
+          </p>
+        </div>
       ) : (
         <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="relative overflow-hidden rounded-3xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)] shadow-[0_18px_44px_rgba(23,58,64,0.12)]">
