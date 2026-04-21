@@ -17,6 +17,14 @@ type CameraState =
   | { status: 'denied' }
   | { status: 'error'; message: string }
 
+type RecordingState =
+  | { status: 'idle' }
+  | { status: 'recording'; startedAt: number }
+  | { status: 'stopping' }
+  | { status: 'stopped'; blob: Blob }
+  | { status: 'unsupported' }
+  | { status: 'error'; message: string }
+
 function getErrorMessage(error: unknown) {
   if (error && typeof error === 'object' && 'name' in error) {
     const name = String((error as { name?: unknown }).name)
@@ -37,6 +45,15 @@ function getMediaDevices() {
   return window.navigator.mediaDevices
 }
 
+function createSessionId() {
+  if (typeof globalThis !== 'undefined' && 'crypto' in globalThis) {
+    const c = globalThis.crypto as Crypto | undefined
+    if (c?.randomUUID) return c.randomUUID()
+  }
+
+  return `sess_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`
+}
+
 async function listVideoInputs() {
   const mediaDevices = getMediaDevices()
   if (!mediaDevices) return []
@@ -52,10 +69,17 @@ async function listVideoInputs() {
 export default function CameraVerifier({
   onConfirm,
 }: {
-  onConfirm?: (assets: { faceDataUrl: string; documentDataUrl: string }) => void
+  onConfirm?: (assets: {
+    sessionId: string
+    faceDataUrl: string
+    documentDataUrl: string
+    backgroundVideo: Blob | null
+  }) => void | Promise<void>
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+
+  const sessionIdRef = useRef<string>(createSessionId())
 
   const [step, setStep] = useState<FlowStep>('face_live')
   const [faceDataUrl, setFaceDataUrl] = useState<string | null>(null)
@@ -67,6 +91,21 @@ export default function CameraVerifier({
   const [facingMode, setFacingMode] = useState<FacingMode>('environment')
   const [cameraState, setCameraState] = useState<CameraState>({ status: 'idle' })
   const [videoInputCount, setVideoInputCount] = useState<number>(0)
+  const [recordingState, setRecordingState] = useState<RecordingState>({
+    status: 'idle',
+  })
+  const [submitState, setSubmitState] = useState<
+    | { status: 'idle' }
+    | { status: 'submitting' }
+    | { status: 'submitted' }
+    | { status: 'error'; message: string }
+  >({ status: 'idle' })
+
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const recordingChunksRef = useRef<BlobPart[]>([])
+  const recordedBlobRef = useRef<Blob | null>(null)
+  const stopRecordingPromiseRef = useRef<Promise<Blob | null> | null>(null)
+  const [recordingSeconds, setRecordingSeconds] = useState<number>(0)
 
   const canFlip = videoInputCount > 1
 
@@ -107,8 +146,156 @@ export default function CameraVerifier({
   }
 
   async function stopCamera() {
+    await stopBackgroundRecording()
     detachStream()
     setCameraState({ status: 'idle' })
+  }
+
+  function pickRecorderMimeType() {
+    if (typeof window === 'undefined') return undefined
+    const candidates = [
+      'video/webm;codecs=vp8,opus',
+      'video/webm;codecs=vp9,opus',
+      'video/webm',
+    ]
+    for (const mimeType of candidates) {
+      if (MediaRecorder.isTypeSupported(mimeType)) return mimeType
+    }
+    return undefined
+  }
+
+  function startBackgroundRecording(stream: MediaStream) {
+    if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') {
+      setRecordingState({ status: 'unsupported' })
+      return
+    }
+
+    if (recorderRef.current && recorderRef.current.state === 'recording') {
+      return
+    }
+
+    recordedBlobRef.current = null
+    recordingChunksRef.current = []
+
+    const mimeType = pickRecorderMimeType()
+    try {
+      const recorder = new MediaRecorder(stream, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: 850_000,
+      })
+
+      recorderRef.current = recorder
+      recorder.ondataavailable = (event) => {
+        if (event.data.size === 0) return
+        recordingChunksRef.current.push(event.data)
+      }
+      recorder.onerror = () => {
+        setRecordingState({
+          status: 'error',
+          message: 'Background recording failed.',
+        })
+      }
+      recorder.onstop = () => {
+        const type = recorder.mimeType || 'video/webm'
+        const blob = new Blob(recordingChunksRef.current, { type })
+        recordedBlobRef.current = blob
+        setRecordingState({ status: 'stopped', blob })
+      }
+
+      const startedAt = Date.now()
+      recorder.start(1000)
+      setRecordingState({ status: 'recording', startedAt })
+    } catch (error) {
+      setRecordingState({
+        status: 'error',
+        message:
+          error instanceof Error ? error.message : 'Unable to start recorder.',
+      })
+    }
+  }
+
+  function switchCameraTrack(nextFacingMode: FacingMode) {
+    const mediaDevices = getMediaDevices()
+    if (!mediaDevices?.getUserMedia) {
+      return Promise.reject(new Error('Camera not supported'))
+    }
+
+    const constraints: MediaStreamConstraints = {
+      audio: false,
+      video: {
+        facingMode: { ideal: nextFacingMode },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    }
+
+    return mediaDevices.getUserMedia(constraints).then((newStream) => {
+      const newTracks = newStream.getVideoTracks()
+      if (newTracks.length === 0) {
+        for (const t of newStream.getTracks()) t.stop()
+        throw new Error('No video track available.')
+      }
+      const newTrack = newTracks[0]
+
+      const existing = streamRef.current
+      if (!existing) {
+        streamRef.current = newStream
+        if (videoRef.current) videoRef.current.srcObject = newStream
+        return
+      }
+
+      const oldTracks = existing.getVideoTracks()
+      if (oldTracks.length > 0) {
+        const oldTrack = oldTracks[0]
+        existing.removeTrack(oldTrack)
+        oldTrack.stop()
+      }
+      existing.addTrack(newTrack)
+
+      for (const t of newStream.getTracks()) {
+        if (t !== newTrack) t.stop()
+      }
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = existing
+      }
+    })
+  }
+
+  async function stopBackgroundRecording(): Promise<Blob | null> {
+    if (stopRecordingPromiseRef.current) return stopRecordingPromiseRef.current
+
+    const recorder = recorderRef.current
+    if (!recorder) {
+      return recordedBlobRef.current
+    }
+
+    if (recordingState.status === 'stopped') {
+      return recordingState.blob
+    }
+
+    if (recorder.state === 'inactive') {
+      return recordedBlobRef.current
+    }
+
+    setRecordingState({ status: 'stopping' })
+    stopRecordingPromiseRef.current = new Promise<Blob | null>((resolve) => {
+      const onStop = () => {
+        recorder.removeEventListener('stop', onStop)
+        stopRecordingPromiseRef.current = null
+        resolve(recordedBlobRef.current)
+      }
+      recorder.addEventListener('stop', onStop)
+      try {
+        recorder.stop()
+      } catch {
+        recorder.removeEventListener('stop', onStop)
+        stopRecordingPromiseRef.current = null
+        resolve(recordedBlobRef.current)
+      }
+    })
+
+    return stopRecordingPromiseRef.current
   }
 
   async function startCamera(nextFacingMode?: FacingMode) {
@@ -129,7 +316,24 @@ export default function CameraVerifier({
     setCameraState({ status: 'starting' })
 
     if (streamRef.current) {
-      detachStream()
+      try {
+        await switchCameraTrack(requestedFacingMode)
+        setFacingMode(requestedFacingMode)
+        setCameraState({ status: 'ready' })
+        return
+      } catch (error) {
+        if (recordingState.status === 'recording') {
+          setCameraState({
+            status: 'error',
+            message:
+              error instanceof Error
+                ? error.message
+                : 'Unable to switch camera.',
+          })
+          return
+        }
+        detachStream()
+      }
     }
 
     const constraints: MediaStreamConstraints = {
@@ -156,6 +360,10 @@ export default function CameraVerifier({
         // Some browsers require a user gesture; the UI already provides one.
       })
 
+      if (recordingState.status === 'idle') {
+        startBackgroundRecording(stream)
+      }
+
       const inputs = await listVideoInputs()
       setVideoInputCount(inputs.length)
       setFacingMode(requestedFacingMode)
@@ -172,6 +380,16 @@ export default function CameraVerifier({
 
   async function flipCamera() {
     const next = facingMode === 'user' ? 'environment' : 'user'
+    if (streamRef.current) {
+      try {
+        await switchCameraTrack(next)
+        setFacingMode(next)
+        setCameraState({ status: 'ready' })
+        return
+      } catch {
+        // Fall back to full restart.
+      }
+    }
     await startCamera(next)
   }
 
@@ -220,6 +438,7 @@ export default function CameraVerifier({
 
   useEffect(() => {
     return () => {
+      void stopBackgroundRecording()
       detachStream()
     }
   }, [])
@@ -227,13 +446,27 @@ export default function CameraVerifier({
   useEffect(() => {
     if (cameraState.status !== 'ready') return
     if (step === 'face_live' && facingMode !== 'user') {
-      void startCamera('user')
+      void flipCamera()
       return
     }
     if (step === 'document_live' && facingMode !== 'environment') {
-      void startCamera('environment')
+      void flipCamera()
     }
   }, [cameraState.status, facingMode, step])
+
+  useEffect(() => {
+    if (recordingState.status !== 'recording') {
+      setRecordingSeconds(0)
+      return
+    }
+
+    const tick = () => {
+      setRecordingSeconds(Math.floor((Date.now() - recordingState.startedAt) / 1000))
+    }
+    tick()
+    const id = window.setInterval(tick, 500)
+    return () => window.clearInterval(id)
+  }, [recordingState])
 
   const previewOverlayCopy = useMemo(() => {
     switch (cameraState.status) {
@@ -283,6 +516,34 @@ export default function CameraVerifier({
               ? 'Confirm both images before submission.'
               : subtitle}
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold text-[var(--sea-ink-soft)]">
+            {recordingState.status === 'recording' ? (
+              <span className="inline-flex items-center gap-2 rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1">
+                <span className="h-2 w-2 rounded-full bg-[linear-gradient(90deg,#56c6be,#7ed3bf)]" />
+                Background recording on
+                <span className="text-[var(--sea-ink-soft)]/70">
+                  • {Math.floor(recordingSeconds / 60)
+                    .toString()
+                    .padStart(2, '0')}
+                  :{(recordingSeconds % 60).toString().padStart(2, '0')}
+                </span>
+              </span>
+            ) : recordingState.status === 'unsupported' ? (
+              <span className="inline-flex items-center rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1">
+                Background video not supported
+              </span>
+            ) : recordingState.status === 'error' ? (
+              <span className="inline-flex items-center rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1">
+                Background recording error
+              </span>
+            ) : null}
+
+            {submitState.status === 'error' ? (
+              <span className="inline-flex items-center rounded-full border border-[rgba(200,60,60,0.25)] bg-[rgba(255,255,255,0.55)] px-3 py-1 text-[rgba(140,30,30,0.9)]">
+                {submitState.message}
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -348,18 +609,37 @@ export default function CameraVerifier({
               </button>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   if (!faceDataUrl || !documentDataUrl) return
-                  onConfirm?.({ faceDataUrl, documentDataUrl })
+                  setSubmitState({ status: 'submitting' })
+                  try {
+                    const backgroundVideo = await stopBackgroundRecording()
+                    await onConfirm?.({
+                      sessionId: sessionIdRef.current,
+                      faceDataUrl,
+                      documentDataUrl,
+                      backgroundVideo,
+                    })
+                    setSubmitState({ status: 'submitted' })
+                    await stopCamera()
+                  } catch (error) {
+                    setSubmitState({
+                      status: 'error',
+                      message:
+                        error instanceof Error
+                          ? error.message
+                          : 'Submission failed.',
+                    })
+                  }
                 }}
-                disabled={!reviewReady}
+                disabled={!reviewReady || submitState.status === 'submitting'}
                 className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5 disabled:opacity-60"
               >
-                Confirm
+                {submitState.status === 'submitting' ? 'Uploading…' : 'Confirm'}
               </button>
             </>
           ) : cameraState.status === 'ready' &&
-            (step === 'face_live' || step === 'document_live') ? (
+            step !== 'review' ? (
             <>
               <button
                 type="button"
@@ -397,13 +677,11 @@ export default function CameraVerifier({
                     if (step === 'face_live') {
                       setFaceDataUrl(dataUrl)
                       setStep('face_preview')
-                      void stopCamera()
                       return
                     }
 
                     setDocumentDataUrl(dataUrl)
                     setStep('document_preview')
-                    void stopCamera()
                   }}
                   className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
                 >
@@ -522,11 +800,19 @@ export default function CameraVerifier({
                     if (step === 'face_preview') {
                       setFaceDataUrl(null)
                       goToFaceLive()
-                      void startCamera('user')
+                      if (cameraState.status !== 'ready') {
+                        void startCamera('user')
+                      } else if (facingMode !== 'user') {
+                        void flipCamera()
+                      }
                     } else {
                       setDocumentDataUrl(null)
                       goToDocumentLive()
-                      void startCamera('environment')
+                      if (cameraState.status !== 'ready') {
+                        void startCamera('environment')
+                      } else if (facingMode !== 'environment') {
+                        void flipCamera()
+                      }
                     }
                   }}
                   className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)]"
@@ -538,11 +824,14 @@ export default function CameraVerifier({
                   onClick={() => {
                     if (step === 'face_preview') {
                       setStep('document_live')
-                      void startCamera('environment')
+                      if (cameraState.status !== 'ready') {
+                        void startCamera('environment')
+                      } else if (facingMode !== 'environment') {
+                        void flipCamera()
+                      }
                       return
                     }
                     setStep('review')
-                    void stopCamera()
                   }}
                   className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
                 >
