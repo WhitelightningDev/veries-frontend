@@ -26,6 +26,20 @@ type RecordingState =
   | { status: 'unsupported' }
   | { status: 'error'; message: string }
 
+type CropRect = { x: number; y: number; width: number; height: number }
+
+const OVERLAY_GEOMETRY = {
+  document: {
+    cutout: { x: 12, y: 30, width: 76, height: 48, radius: 5 },
+    crop: { x: 0.12, y: 0.3, width: 0.76, height: 0.48 } satisfies CropRect,
+  },
+  face: {
+    oval: { cx: 44, cy: 44, rx: 20, ry: 27 },
+    eyeLineY: 38,
+    idHint: { x: 60, y: 57, width: 30, height: 20, radius: 4 },
+  },
+} as const
+
 function getErrorMessage(error: unknown) {
   if (error && typeof error === 'object' && 'name' in error) {
     const name = String((error as { name?: unknown }).name)
@@ -137,6 +151,7 @@ export default function CameraVerifier({
     return mode === 'face'
       ? [
           'Align your face inside the oval.',
+          'Keep your eyes near the dashed line.',
           'Hold your ID beside your face and keep it readable.',
           'Make sure lighting is bright and even (avoid strong backlight).',
         ]
@@ -485,14 +500,26 @@ export default function CameraVerifier({
     const height = video.videoHeight
     if (!width || !height) return null
 
+    const crop = mode === 'document' ? OVERLAY_GEOMETRY.document.crop : null
+    const sx = crop ? Math.round(crop.x * width) : 0
+    const sy = crop ? Math.round(crop.y * height) : 0
+    const sw = crop ? Math.round(crop.width * width) : width
+    const sh = crop ? Math.round(crop.height * height) : height
+
     const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
+    canvas.width = sw
+    canvas.height = sh
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
 
-    ctx.drawImage(video, 0, 0, width, height)
+    if (facingMode === 'user') {
+      ctx.translate(canvas.width, 0)
+      ctx.scale(-1, 1)
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh)
+    } else {
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh)
+    }
     return canvas.toDataURL('image/jpeg', 0.92)
   }
 
@@ -1238,6 +1265,13 @@ export default function CameraVerifier({
 }
 
 function Overlay({ mode }: { mode: CaptureMode }) {
+  const documentCutout = OVERLAY_GEOMETRY.document.cutout
+  const faceOverlay = OVERLAY_GEOMETRY.face
+
+  const documentPath = `M${documentCutout.x},${documentCutout.y} h${documentCutout.width} v${documentCutout.height} h-${documentCutout.width} Z`
+  const corner = 6
+  const cornerStroke = 2.2
+
   return (
     <svg
       className="absolute inset-0 h-full w-full"
@@ -1249,9 +1283,22 @@ function Overlay({ mode }: { mode: CaptureMode }) {
         <mask id={`cutout-${mode}`}>
           <rect x="0" y="0" width="100" height="100" fill="white" />
           {mode === 'face' ? (
-            <ellipse cx="50" cy="44" rx="22" ry="28" fill="black" />
+            <ellipse
+              cx={faceOverlay.oval.cx}
+              cy={faceOverlay.oval.cy}
+              rx={faceOverlay.oval.rx}
+              ry={faceOverlay.oval.ry}
+              fill="black"
+            />
           ) : (
-            <rect x="16" y="22" width="68" height="56" rx="6" fill="black" />
+            <rect
+              x={documentCutout.x}
+              y={documentCutout.y}
+              width={documentCutout.width}
+              height={documentCutout.height}
+              rx={documentCutout.radius}
+              fill="black"
+            />
           )}
         </mask>
       </defs>
@@ -1268,21 +1315,31 @@ function Overlay({ mode }: { mode: CaptureMode }) {
       {mode === 'face' ? (
         <>
           <ellipse
-            cx="50"
-            cy="44"
-            rx="22"
-            ry="28"
+            cx={faceOverlay.oval.cx}
+            cy={faceOverlay.oval.cy}
+            rx={faceOverlay.oval.rx}
+            ry={faceOverlay.oval.ry}
             fill="transparent"
             stroke="var(--lagoon)"
             strokeOpacity="0.95"
             strokeWidth="1.5"
           />
+          <line
+            x1={faceOverlay.oval.cx - 16}
+            x2={faceOverlay.oval.cx + 16}
+            y1={faceOverlay.eyeLineY}
+            y2={faceOverlay.eyeLineY}
+            stroke="var(--lagoon)"
+            strokeOpacity="0.75"
+            strokeWidth="1.2"
+            strokeDasharray="3 3"
+          />
           <rect
-            x="58"
-            y="58"
-            width="30"
-            height="20"
-            rx="4"
+            x={faceOverlay.idHint.x}
+            y={faceOverlay.idHint.y}
+            width={faceOverlay.idHint.width}
+            height={faceOverlay.idHint.height}
+            rx={faceOverlay.idHint.radius}
             fill="transparent"
             stroke="var(--lagoon)"
             strokeOpacity="0.95"
@@ -1291,17 +1348,63 @@ function Overlay({ mode }: { mode: CaptureMode }) {
           />
         </>
       ) : (
-        <rect
-          x="16"
-          y="22"
-          width="68"
-          height="56"
-          rx="6"
-          fill="transparent"
-          stroke="var(--lagoon)"
-          strokeOpacity="0.95"
-          strokeWidth="1.5"
-        />
+        <>
+          <rect
+            x={documentCutout.x}
+            y={documentCutout.y}
+            width={documentCutout.width}
+            height={documentCutout.height}
+            rx={documentCutout.radius}
+            fill="transparent"
+            stroke="var(--lagoon)"
+            strokeOpacity="0.9"
+            strokeWidth="1.6"
+          />
+          {(
+            [
+              {
+                x: documentCutout.x,
+                y: documentCutout.y,
+                dirX: 1,
+                dirY: 1,
+              },
+              {
+                x: documentCutout.x + documentCutout.width,
+                y: documentCutout.y,
+                dirX: -1,
+                dirY: 1,
+              },
+              {
+                x: documentCutout.x,
+                y: documentCutout.y + documentCutout.height,
+                dirX: 1,
+                dirY: -1,
+              },
+              {
+                x: documentCutout.x + documentCutout.width,
+                y: documentCutout.y + documentCutout.height,
+                dirX: -1,
+                dirY: -1,
+              },
+            ] as const
+          ).map((c) => (
+            <path
+              key={`${c.x}-${c.y}`}
+              d={`M${c.x},${c.y} h${corner * c.dirX} M${c.x},${c.y} v${corner * c.dirY}`}
+              stroke="var(--lagoon)"
+              strokeOpacity="0.95"
+              strokeWidth={cornerStroke}
+              strokeLinecap="round"
+            />
+          ))}
+          <path
+            d={documentPath}
+            fill="transparent"
+            stroke="rgba(255,255,255,0.12)"
+            strokeWidth="1"
+            strokeDasharray="2 3"
+          />
+        </>
       )}
     </svg>
   )
