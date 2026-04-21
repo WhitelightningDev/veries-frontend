@@ -496,6 +496,28 @@ export default function CameraVerifier({
     return canvas.toDataURL('image/jpeg', 0.92)
   }
 
+  function handleCapture() {
+    const dataUrl = captureFrame()
+    if (!dataUrl) {
+      setCameraState({
+        status: 'error',
+        message: 'Unable to capture a frame. Please try again.',
+      })
+      return
+    }
+
+    if (step === 'face_live') {
+      setFaceDataUrl(dataUrl)
+      setStep('face_preview')
+      trackEvent('face_captured')
+      return
+    }
+
+    setDocumentDataUrl(dataUrl)
+    setStep('document_preview')
+    trackEvent('document_captured')
+  }
+
   function goToFaceLive() {
     setStep('face_live')
   }
@@ -635,8 +657,149 @@ export default function CameraVerifier({
   const primaryActionLabel =
     step === 'face_live' || step === 'document_live' ? 'Capture' : null
 
+  const activeStep =
+    step === 'document_live' || step === 'document_preview'
+      ? 'document'
+      : step === 'face_live' || step === 'face_preview'
+        ? 'selfie'
+        : step === 'review'
+          ? 'review'
+          : null
+
+  const stepper = (
+    <div className="w-full max-w-full overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+      <nav aria-label="Verification steps" className="w-max sm:w-auto">
+        <ol className="flex items-center gap-3 sm:gap-4">
+          <li className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() =>
+                setStep(documentComplete ? 'document_preview' : 'document_live')
+              }
+              aria-current={activeStep === 'document' ? 'step' : undefined}
+              className="group inline-flex items-center gap-2 text-left"
+            >
+              <span
+                className={[
+                  'grid h-8 w-8 place-items-center rounded-full border text-sm font-semibold transition',
+                  activeStep === 'document'
+                    ? 'border-[var(--lagoon)] bg-[var(--lagoon)] text-white'
+                    : documentComplete
+                      ? 'border-[var(--lagoon)] bg-[var(--accent-soft)] text-[var(--lagoon-deep)]'
+                      : 'border-[var(--chip-line)] bg-[var(--chip-bg)] text-[var(--sea-ink-soft)] group-hover:text-[var(--sea-ink)]',
+                ].join(' ')}
+              >
+                1
+              </span>
+              <span
+                className={[
+                  'text-sm font-semibold transition',
+                  activeStep === 'document' || documentComplete
+                    ? 'text-[var(--sea-ink)]'
+                    : 'text-[var(--sea-ink-soft)] group-hover:text-[var(--sea-ink)]',
+                ].join(' ')}
+              >
+                Document
+              </span>
+            </button>
+          </li>
+
+          <li
+            aria-hidden="true"
+            className={[
+              'h-[2px] w-10 rounded-full sm:w-14',
+              documentComplete
+                ? 'bg-[linear-gradient(90deg,var(--lagoon),#75b5ff)]'
+                : 'bg-[var(--line)]',
+            ].join(' ')}
+          />
+
+          <li className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() =>
+                documentComplete
+                  ? setStep(faceComplete ? 'face_preview' : 'face_live')
+                  : undefined
+              }
+              disabled={!documentComplete}
+              aria-current={activeStep === 'selfie' ? 'step' : undefined}
+              className="group inline-flex items-center gap-2 text-left disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span
+                className={[
+                  'grid h-8 w-8 place-items-center rounded-full border text-sm font-semibold transition',
+                  activeStep === 'selfie'
+                    ? 'border-[var(--lagoon)] bg-[var(--lagoon)] text-white'
+                    : faceComplete
+                      ? 'border-[var(--lagoon)] bg-[var(--accent-soft)] text-[var(--lagoon-deep)]'
+                      : 'border-[var(--chip-line)] bg-[var(--chip-bg)] text-[var(--sea-ink-soft)] group-hover:text-[var(--sea-ink)]',
+                ].join(' ')}
+              >
+                2
+              </span>
+              <span
+                className={[
+                  'text-sm font-semibold transition',
+                  activeStep === 'selfie' || faceComplete
+                    ? 'text-[var(--sea-ink)]'
+                    : 'text-[var(--sea-ink-soft)] group-hover:text-[var(--sea-ink)]',
+                ].join(' ')}
+              >
+                Selfie
+              </span>
+            </button>
+          </li>
+
+          <li
+            aria-hidden="true"
+            className={[
+              'h-[2px] w-10 rounded-full sm:w-14',
+              faceComplete
+                ? 'bg-[linear-gradient(90deg,var(--lagoon),#75b5ff)]'
+                : 'bg-[var(--line)]',
+            ].join(' ')}
+          />
+
+          <li className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => (reviewReady ? setStep('review') : undefined)}
+              disabled={!reviewReady}
+              aria-current={activeStep === 'review' ? 'step' : undefined}
+              className="group inline-flex items-center gap-2 text-left disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span
+                className={[
+                  'grid h-8 w-8 place-items-center rounded-full border text-sm font-semibold transition',
+                  activeStep === 'review'
+                    ? 'border-[var(--lagoon)] bg-[var(--lagoon)] text-white'
+                    : reviewReady
+                      ? 'border-[var(--lagoon)] bg-[var(--accent-soft)] text-[var(--lagoon-deep)]'
+                      : 'border-[var(--chip-line)] bg-[var(--chip-bg)] text-[var(--sea-ink-soft)] group-hover:text-[var(--sea-ink)]',
+                ].join(' ')}
+              >
+                3
+              </span>
+              <span
+                className={[
+                  'text-sm font-semibold transition',
+                  activeStep === 'review' || reviewReady
+                    ? 'text-[var(--sea-ink)]'
+                    : 'text-[var(--sea-ink-soft)] group-hover:text-[var(--sea-ink)]',
+                ].join(' ')}
+              >
+                Review
+              </span>
+            </button>
+          </li>
+        </ol>
+      </nav>
+    </div>
+  )
+
   return (
-    <section className="island-shell rise-in rounded-2xl p-5 sm:p-7">
+    <section className="island-shell rise-in rounded-2xl p-4 sm:p-7">
       <input
         ref={documentFileInputRef}
         type="file"
@@ -711,52 +874,8 @@ export default function CameraVerifier({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] p-1 shadow-[0_8px_18px_var(--shadow-soft)]">
-            <button
-              type="button"
-              onClick={() =>
-                setStep(documentComplete ? 'document_preview' : 'document_live')
-              }
-              className={
-                step === 'document_live' ||
-                step === 'document_preview' ||
-                step === 'review'
-                  ? 'rounded-full bg-white/70 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)]'
-                  : 'rounded-full px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]'
-              }
-            >
-              Document
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                documentComplete
-                  ? setStep(faceComplete ? 'face_preview' : 'face_live')
-                  : undefined
-              }
-              disabled={!documentComplete}
-              className={
-                step === 'face_live' || step === 'face_preview'
-                  ? 'rounded-full bg-white/70 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] disabled:opacity-60'
-                  : 'rounded-full px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)] disabled:opacity-60'
-              }
-            >
-              Selfie
-            </button>
-            <button
-              type="button"
-              onClick={() => (reviewReady ? setStep('review') : undefined)}
-              disabled={!reviewReady}
-              className={
-                step === 'review'
-                  ? 'rounded-full bg-white/70 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] disabled:opacity-60'
-                  : 'rounded-full px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)] disabled:opacity-60'
-              }
-            >
-              Review
-            </button>
-          </div>
+        <div className="flex w-full flex-col flex-wrap items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center">
+          {stepper}
 
           {step === 'face_live' || step === 'document_live' ? (
             <button
@@ -765,7 +884,7 @@ export default function CameraVerifier({
                 void stopCamera()
                 openUploadPicker(mode)
               }}
-              className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
+              className="rounded-full border border-[var(--chip-line)] bg-white/60 px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
             >
               Upload photo
             </button>
@@ -874,27 +993,7 @@ export default function CameraVerifier({
               {primaryActionLabel ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    const dataUrl = captureFrame()
-                    if (!dataUrl) {
-                      setCameraState({
-                        status: 'error',
-                        message: 'Unable to capture a frame. Please try again.',
-                      })
-                      return
-                    }
-
-                    if (step === 'face_live') {
-                      setFaceDataUrl(dataUrl)
-                      setStep('face_preview')
-                      trackEvent('face_captured')
-                      return
-                    }
-
-                    setDocumentDataUrl(dataUrl)
-                    setStep('document_preview')
-                    trackEvent('document_captured')
-                  }}
+                  onClick={handleCapture}
                   className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5"
                 >
                   {primaryActionLabel}
@@ -934,151 +1033,205 @@ export default function CameraVerifier({
           <p className="mt-2 mb-0 text-sm">You can safely close this page.</p>
         </div>
       ) : (
-        <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="relative overflow-hidden rounded-2xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)] shadow-[0_18px_44px_var(--shadow-deep)]">
-            <div className="relative" style={{ aspectRatio: '4 / 5' }}>
-              {step === 'face_preview' && faceDataUrl ? (
-                <img
-                  src={faceDataUrl}
-                  alt="Captured face preview"
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              ) : step === 'document_preview' && documentDataUrl ? (
-                <img
-                  src={documentDataUrl}
-                  alt="Captured document preview"
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              ) : (
-                <video
-                  ref={videoRef}
-                  className={
-                    facingMode === 'user'
-                      ? 'absolute inset-0 h-full w-full object-cover [transform:scaleX(-1)]'
-                      : 'absolute inset-0 h-full w-full object-cover'
-                  }
-                  autoPlay
-                  playsInline
-                  muted
-                />
-              )}
+        <>
+          <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="relative overflow-hidden rounded-2xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)] shadow-[0_18px_44px_var(--shadow-deep)]">
+              <div className="relative" style={{ aspectRatio: '4 / 5' }}>
+                {step === 'face_preview' && faceDataUrl ? (
+                  <img
+                    src={faceDataUrl}
+                    alt="Captured face preview"
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                ) : step === 'document_preview' && documentDataUrl ? (
+                  <img
+                    src={documentDataUrl}
+                    alt="Captured document preview"
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                ) : (
+                  <video
+                    ref={videoRef}
+                    className={
+                      facingMode === 'user'
+                        ? 'absolute inset-0 h-full w-full object-cover [transform:scaleX(-1)]'
+                        : 'absolute inset-0 h-full w-full object-cover'
+                    }
+                    autoPlay
+                    playsInline
+                    muted
+                  />
+                )}
 
-              {step === 'face_live' || step === 'document_live' ? (
-                <Overlay mode={mode} />
-              ) : null}
+                {step === 'face_live' || step === 'document_live' ? (
+                  <Overlay mode={mode} />
+                ) : null}
 
-              <div className="absolute left-4 top-4 rounded-full border border-[rgba(255,255,255,0.25)] bg-[rgba(15,27,31,0.55)] px-3 py-1.5 text-xs font-semibold tracking-wide text-white">
-                {mode === 'face' ? 'FACE' : 'DOCUMENT'}
-                {cameraState.status === 'ready' ? (
-                  <span className="ml-2 text-white/70">
-                    {facingMode === 'user' ? 'Front' : 'Back'}
-                  </span>
+                <div className="absolute left-4 top-4 rounded-full border border-[rgba(255,255,255,0.25)] bg-[rgba(15,27,31,0.55)] px-3 py-1.5 text-xs font-semibold tracking-wide text-white">
+                  {mode === 'face' ? 'FACE' : 'DOCUMENT'}
+                  {cameraState.status === 'ready' ? (
+                    <span className="ml-2 text-white/70">
+                      {facingMode === 'user' ? 'Front' : 'Back'}
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="absolute left-4 right-4 bottom-4 rounded-2xl border border-[rgba(255,255,255,0.18)] bg-[rgba(15,27,31,0.55)] px-3 py-2 text-left text-[11px] text-white/80 backdrop-blur-sm sm:px-4 sm:py-3 sm:text-xs">
+                  <p className="m-0 font-semibold text-white">
+                    {mode === 'face'
+                      ? 'Align your face in the oval and hold your ID visibly.'
+                      : 'Keep your ID inside the frame and avoid glare.'}
+                  </p>
+                  <p className="mt-1 mb-0">
+                    {mode === 'face'
+                      ? 'Bright, even lighting helps. Keep both face + ID sharp.'
+                      : 'Hold steady so text stays readable and edges remain visible.'}
+                  </p>
+                </div>
+
+                {previewOverlayCopy &&
+                (step === 'face_live' || step === 'document_live') ? (
+                  <div className="absolute inset-0 grid place-items-center bg-[rgba(8,14,16,0.55)] px-4 text-center sm:px-6">
+                    <div className="max-w-sm">
+                      <p className="m-0 text-sm font-semibold text-white">
+                        {previewOverlayCopy.title}
+                      </p>
+                      <p className="mt-2 mb-0 text-sm text-white/75">
+                        {previewOverlayCopy.detail}
+                      </p>
+                    </div>
+                  </div>
                 ) : null}
               </div>
+            </div>
 
-              <div className="absolute left-4 right-4 bottom-4 rounded-2xl border border-[rgba(255,255,255,0.18)] bg-[rgba(15,27,31,0.55)] px-4 py-3 text-left text-xs text-white/80 backdrop-blur-sm">
-                <p className="m-0 font-semibold text-white">
-                  {mode === 'face'
-                    ? 'Align your face in the oval and hold your ID visibly.'
-                    : 'Keep your ID inside the frame and avoid glare.'}
-                </p>
-                <p className="mt-1 mb-0">
-                  {mode === 'face'
-                    ? 'Bright, even lighting helps. Keep both face + ID sharp.'
-                    : 'Hold steady so text stays readable and edges remain visible.'}
-                </p>
-              </div>
+            <aside className="island-shell rounded-2xl p-5">
+              <p className="island-kicker mb-2">On-screen guidance</p>
+              <h2 className="m-0 text-lg font-semibold text-[var(--sea-ink)]">
+                {mode === 'face' ? 'Face + ID check' : 'Document clarity check'}
+              </h2>
+              <ul className="mt-4 mb-0 list-disc space-y-2 pl-5 text-sm leading-6 text-[var(--sea-ink-soft)]">
+                {tips.map((tip) => (
+                  <li key={tip}>{tip}</li>
+                ))}
+              </ul>
 
-              {previewOverlayCopy &&
-              (step === 'face_live' || step === 'document_live') ? (
-                <div className="absolute inset-0 grid place-items-center bg-[rgba(8,14,16,0.55)] px-6 text-center">
-                  <div className="max-w-sm">
-                    <p className="m-0 text-sm font-semibold text-white">
-                      {previewOverlayCopy.title}
-                    </p>
-                    <p className="mt-2 mb-0 text-sm text-white/75">
-                      {previewOverlayCopy.detail}
-                    </p>
-                  </div>
+              {step === 'face_preview' || step === 'document_preview' ? (
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (step === 'face_preview') {
+                        setFaceDataUrl(null)
+                        trackEvent('face_retake')
+                        goToFaceLive()
+                        if (cameraState.status !== 'ready') {
+                          void startCamera('user')
+                        } else if (facingMode !== 'user') {
+                          void flipCamera()
+                        }
+                      } else {
+                        setDocumentDataUrl(null)
+                        trackEvent('document_retake')
+                        goToDocumentLive()
+                        if (cameraState.status !== 'ready') {
+                          void startCamera('environment')
+                        } else if (facingMode !== 'environment') {
+                          void flipCamera()
+                        }
+                      }
+                    }}
+                    className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
+                  >
+                    Retake
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (step === 'document_preview') {
+                        trackEvent('document_confirmed')
+                        setStep('face_live')
+                        if (cameraState.status !== 'ready') {
+                          void startCamera('user')
+                        } else if (facingMode !== 'user') {
+                          void flipCamera()
+                        }
+                        return
+                      }
+                      trackEvent('face_confirmed')
+                      setStep('review')
+                    }}
+                    className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5"
+                  >
+                    {step === 'document_preview'
+                      ? 'Use document photo'
+                      : 'Use selfie photo'}
+                  </button>
                 </div>
               ) : null}
-            </div>
+
+              <div className="mt-5 rounded-2xl border border-[var(--line)] bg-white/50 p-4 text-sm text-[var(--sea-ink-soft)]">
+                <p className="m-0 font-semibold text-[var(--sea-ink)]">Tip</p>
+                <p className="mt-1 mb-0">
+                  Wipe your camera lens and avoid reflections from overhead
+                  lights for the best result.
+                </p>
+              </div>
+            </aside>
           </div>
 
-          <aside className="island-shell rounded-2xl p-5">
-            <p className="island-kicker mb-2">On-screen guidance</p>
-            <h2 className="m-0 text-lg font-semibold text-[var(--sea-ink)]">
-              {mode === 'face' ? 'Face + ID check' : 'Document clarity check'}
-            </h2>
-            <ul className="mt-4 mb-0 list-disc space-y-2 pl-5 text-sm leading-6 text-[var(--sea-ink-soft)]">
-              {tips.map((tip) => (
-                <li key={tip}>{tip}</li>
-              ))}
-            </ul>
+          {step === 'face_live' || step === 'document_live' ? (
+            <div className="sticky bottom-3 mt-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--line)] bg-[var(--header-bg)] p-2 shadow-[0_18px_34px_var(--shadow-soft)] backdrop-blur sm:hidden">
+              <button
+                type="button"
+                onClick={() => {
+                  void stopCamera()
+                  openUploadPicker(mode)
+                }}
+                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
+              >
+                Upload
+              </button>
 
-            {step === 'face_preview' || step === 'document_preview' ? (
-              <div className="mt-5 flex flex-wrap gap-2">
+              {cameraState.status === 'ready' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={flipCamera}
+                    disabled={!canFlip}
+                    className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] disabled:opacity-60"
+                  >
+                    Flip
+                  </button>
+                  <button
+                    type="button"
+                    onClick={stopCamera}
+                    className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
+                  >
+                    Stop
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCapture}
+                    className="ml-auto rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2 text-sm font-semibold text-[var(--lagoon-deep)]"
+                  >
+                    Capture
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (step === 'face_preview') {
-                      setFaceDataUrl(null)
-                      trackEvent('face_retake')
-                      goToFaceLive()
-                      if (cameraState.status !== 'ready') {
-                        void startCamera('user')
-                      } else if (facingMode !== 'user') {
-                        void flipCamera()
-                      }
-                    } else {
-                      setDocumentDataUrl(null)
-                      trackEvent('document_retake')
-                      goToDocumentLive()
-                      if (cameraState.status !== 'ready') {
-                        void startCamera('environment')
-                      } else if (facingMode !== 'environment') {
-                        void flipCamera()
-                      }
-                    }
-                  }}
-                  className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_var(--shadow-soft)]"
+                  onClick={() => startCamera()}
+                  disabled={cameraState.status === 'starting'}
+                  className="ml-auto rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2 text-sm font-semibold text-[var(--lagoon-deep)] disabled:opacity-60"
                 >
-                  Retake
+                  {cameraState.status === 'starting' ? 'Starting…' : 'Start'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (step === 'document_preview') {
-                      trackEvent('document_confirmed')
-                      setStep('face_live')
-                      if (cameraState.status !== 'ready') {
-                        void startCamera('user')
-                      } else if (facingMode !== 'user') {
-                        void flipCamera()
-                      }
-                      return
-                    }
-                    trackEvent('face_confirmed')
-                    setStep('review')
-                  }}
-                  className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5"
-                >
-                  {step === 'document_preview'
-                    ? 'Use document photo'
-                    : 'Use selfie photo'}
-                </button>
-              </div>
-            ) : null}
-
-            <div className="mt-5 rounded-2xl border border-[var(--line)] bg-white/50 p-4 text-sm text-[var(--sea-ink-soft)]">
-              <p className="m-0 font-semibold text-[var(--sea-ink)]">Tip</p>
-              <p className="mt-1 mb-0">
-                Wipe your camera lens and avoid reflections from overhead lights
-                for the best result.
-              </p>
+              )}
+              <div className="h-[env(safe-area-inset-bottom)] w-full" />
             </div>
-          </aside>
-        </div>
+          ) : null}
+        </>
       )}
     </section>
   )

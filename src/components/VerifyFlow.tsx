@@ -10,7 +10,7 @@ function dataUrlToBlob(dataUrl: string) {
 
 export default function VerifyFlow() {
   return (
-    <main className="page-wrap px-4 pb-10 pt-10 sm:pt-14">
+    <main className="page-wrap pb-[calc(2.5rem+env(safe-area-inset-bottom))] pt-8 sm:pt-14">
       <CameraVerifier
         onConfirm={async ({
           sessionId,
