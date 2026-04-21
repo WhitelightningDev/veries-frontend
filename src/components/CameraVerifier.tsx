@@ -79,18 +79,31 @@ export default function CameraVerifier({
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const faceFileInputRef = useRef<HTMLInputElement | null>(null)
+  const documentFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const sessionIdRef = useRef<string>(createSessionId())
 
-  const [step, setStep] = useState<FlowStep>('face_live')
+  const [step, setStep] = useState<FlowStep>('document_live')
   const [faceDataUrl, setFaceDataUrl] = useState<string | null>(null)
   const [documentDataUrl, setDocumentDataUrl] = useState<string | null>(null)
 
   const mode: CaptureMode =
     step === 'face_live' || step === 'face_preview' ? 'face' : 'document'
 
+  const stepRef = useRef<FlowStep>(step)
+  const modeRef = useRef<CaptureMode>(mode)
+  useEffect(() => {
+    stepRef.current = step
+  }, [step])
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
+
   const [facingMode, setFacingMode] = useState<FacingMode>('environment')
-  const [cameraState, setCameraState] = useState<CameraState>({ status: 'idle' })
+  const [cameraState, setCameraState] = useState<CameraState>({
+    status: 'idle',
+  })
   const [videoInputCount, setVideoInputCount] = useState<number>(0)
   const [recordingState, setRecordingState] = useState<RecordingState>({
     status: 'idle',
@@ -118,7 +131,7 @@ export default function CameraVerifier({
   const subtitle =
     mode === 'face'
       ? 'Align your face, then hold your ID visibly.'
-      : 'Place your ID in frame so text is clear.'
+      : 'Capture your ID document first, then move to the selfie step.'
 
   const tips = useMemo(() => {
     return mode === 'face'
@@ -135,6 +148,66 @@ export default function CameraVerifier({
         ]
   }, [mode])
 
+  function trackEvent(name: string, data?: Record<string, unknown>) {
+    if (typeof window === 'undefined') return
+
+    const payload = JSON.stringify({
+      session_id: sessionIdRef.current,
+      name,
+      ...(data ? { data } : {}),
+    })
+
+    try {
+      if ('sendBeacon' in window.navigator) {
+        const { sendBeacon } = window.navigator as Navigator & {
+          sendBeacon: (url: string, data?: BodyInit | null) => boolean
+        }
+        const blob = new Blob([payload], { type: 'application/json' })
+        sendBeacon('/api/verify/event', blob)
+        return
+      }
+    } catch {
+      // Fall back to fetch.
+    }
+
+    void fetch('/api/verify/event', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+      keepalive: true,
+    }).catch(() => {})
+  }
+
+  function handleUploadedImage(target: CaptureMode, file: File) {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : null
+      if (!result) return
+
+      if (target === 'face') {
+        setFaceDataUrl(result)
+        setStep('face_preview')
+        trackEvent('face_uploaded', { bytes: file.size, type: file.type })
+        return
+      }
+
+      setDocumentDataUrl(result)
+      setStep('document_preview')
+      trackEvent('document_uploaded', { bytes: file.size, type: file.type })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function openUploadPicker(target: CaptureMode) {
+    const input =
+      target === 'face'
+        ? faceFileInputRef.current
+        : documentFileInputRef.current
+    if (!input) return
+    input.value = ''
+    input.click()
+  }
+
   function detachStream() {
     const stream = streamRef.current
     streamRef.current = null
@@ -150,6 +223,7 @@ export default function CameraVerifier({
     await stopBackgroundRecording()
     detachStream()
     setCameraState({ status: 'idle' })
+    trackEvent('camera_stopped')
   }
 
   function pickRecorderMimeType() {
@@ -352,7 +426,10 @@ export default function CameraVerifier({
 
       const video = videoRef.current
       if (!video) {
-        setCameraState({ status: 'error', message: 'Video element not available.' })
+        setCameraState({
+          status: 'error',
+          message: 'Video element not available.',
+        })
         return
       }
 
@@ -368,14 +445,20 @@ export default function CameraVerifier({
       const inputs = await listVideoInputs()
       setVideoInputCount(inputs.length)
       setFacingMode(requestedFacingMode)
+      trackEvent('camera_started', {
+        facing_mode: requestedFacingMode,
+        inputs: inputs.length,
+      })
       setCameraState({ status: 'ready' })
     } catch (error) {
       const msg = getErrorMessage(error)
       if (msg === 'denied') {
         setCameraState({ status: 'denied' })
+        trackEvent('camera_denied')
         return
       }
       setCameraState({ status: 'error', message: msg })
+      trackEvent('camera_error', { message: msg })
     }
   }
 
@@ -454,6 +537,43 @@ export default function CameraVerifier({
   }, [])
 
   useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return
+
+    let wasHidden = document.hidden
+
+    const onVisibilityChange = () => {
+      const isHidden = document.hidden
+      if (isHidden) {
+        trackEvent('session_dropoff', {
+          step: stepRef.current,
+          mode: modeRef.current,
+        })
+      } else if (wasHidden) {
+        trackEvent('session_resumed', {
+          step: stepRef.current,
+          mode: modeRef.current,
+        })
+      }
+      wasHidden = isHidden
+    }
+
+    const onPageHide = () => {
+      trackEvent('session_dropoff', {
+        step: stepRef.current,
+        mode: modeRef.current,
+        reason: 'pagehide',
+      })
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('pagehide', onPageHide)
+    }
+  }, [])
+
+  useEffect(() => {
     if (cameraState.status !== 'ready') return
     if (step === 'face_live' && facingMode !== 'user') {
       void flipCamera()
@@ -471,7 +591,9 @@ export default function CameraVerifier({
     }
 
     const tick = () => {
-      setRecordingSeconds(Math.floor((Date.now() - recordingState.startedAt) / 1000))
+      setRecordingSeconds(
+        Math.floor((Date.now() - recordingState.startedAt) / 1000),
+      )
     }
     tick()
     const id = window.setInterval(tick, 500)
@@ -483,7 +605,7 @@ export default function CameraVerifier({
       case 'idle':
         return {
           title: 'Camera is off',
-          detail: 'Tap “Start camera” to begin.',
+          detail: 'Tap “Start camera” (or upload a photo) to begin.',
         }
       case 'starting':
         return {
@@ -493,12 +615,12 @@ export default function CameraVerifier({
       case 'unsupported':
         return {
           title: 'Camera not supported',
-          detail: 'Your browser does not support camera access.',
+          detail: 'Upload a photo instead to continue.',
         }
       case 'denied':
         return {
           title: 'Camera permission denied',
-          detail: 'Enable camera permission in your browser settings, then try again.',
+          detail: 'Enable permission in settings, or upload a photo instead.',
         }
       case 'error':
         return {
@@ -515,6 +637,28 @@ export default function CameraVerifier({
 
   return (
     <section className="island-shell rise-in rounded-3xl p-5 sm:p-7">
+      <input
+        ref={documentFileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0]
+          if (!file) return
+          handleUploadedImage('document', file)
+        }}
+      />
+      <input
+        ref={faceFileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0]
+          if (!file) return
+          handleUploadedImage('face', file)
+        }}
+      />
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="island-kicker mb-2">Camera verification</p>
@@ -530,7 +674,7 @@ export default function CameraVerifier({
               ? 'Confirm both images before submission.'
               : step === 'success'
                 ? 'Verification assets uploaded successfully.'
-              : subtitle}
+                : subtitle}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold text-[var(--sea-ink-soft)]">
             {recordingState.status === 'recording' ? (
@@ -538,7 +682,8 @@ export default function CameraVerifier({
                 <span className="h-2 w-2 rounded-full bg-[linear-gradient(90deg,#56c6be,#7ed3bf)]" />
                 Background recording on
                 <span className="text-[var(--sea-ink-soft)]/70">
-                  • {Math.floor(recordingSeconds / 60)
+                  •{' '}
+                  {Math.floor(recordingSeconds / 60)
                     .toString()
                     .padStart(2, '0')}
                   :{(recordingSeconds % 60).toString().padStart(2, '0')}
@@ -552,7 +697,11 @@ export default function CameraVerifier({
               <span className="inline-flex items-center rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1">
                 Background recording error
               </span>
-            ) : null}
+            ) : (
+              <span className="inline-flex items-center rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1">
+                Background video records during capture
+              </span>
+            )}
 
             {submitState.status === 'error' ? (
               <span className="inline-flex items-center rounded-full border border-[rgba(200,60,60,0.25)] bg-[rgba(255,255,255,0.55)] px-3 py-1 text-[rgba(140,30,30,0.9)]">
@@ -566,30 +715,34 @@ export default function CameraVerifier({
           <div className="flex rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] p-1 shadow-[0_8px_18px_rgba(30,90,72,0.08)]">
             <button
               type="button"
-              onClick={() => setStep(faceComplete ? 'face_preview' : 'face_live')}
+              onClick={() =>
+                setStep(documentComplete ? 'document_preview' : 'document_live')
+              }
               className={
-                step === 'face_live' || step === 'face_preview'
+                step === 'document_live' ||
+                step === 'document_preview' ||
+                step === 'review'
                   ? 'rounded-full bg-white/70 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)]'
                   : 'rounded-full px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)]'
               }
             >
-              Face
+              Document
             </button>
             <button
               type="button"
               onClick={() =>
-                faceComplete
-                  ? setStep(documentComplete ? 'document_preview' : 'document_live')
+                documentComplete
+                  ? setStep(faceComplete ? 'face_preview' : 'face_live')
                   : undefined
               }
-              disabled={!faceComplete}
+              disabled={!documentComplete}
               className={
-                step === 'document_live' || step === 'document_preview' || step === 'review'
+                step === 'face_live' || step === 'face_preview'
                   ? 'rounded-full bg-white/70 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] disabled:opacity-60'
                   : 'rounded-full px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink-soft)] hover:text-[var(--sea-ink)] disabled:opacity-60'
               }
             >
-              Document
+              Selfie
             </button>
             <button
               type="button"
@@ -605,6 +758,19 @@ export default function CameraVerifier({
             </button>
           </div>
 
+          {step === 'face_live' || step === 'document_live' ? (
+            <button
+              type="button"
+              onClick={() => {
+                void stopCamera()
+                openUploadPicker(mode)
+              }}
+              className="rounded-full border border-[var(--chip-line)] bg-white/60 px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)]"
+            >
+              Upload photo
+            </button>
+          ) : null}
+
           {step === 'success' ? (
             <button
               type="button"
@@ -618,7 +784,8 @@ export default function CameraVerifier({
                 setSubmitState({ status: 'idle' })
                 setFaceDataUrl(null)
                 setDocumentDataUrl(null)
-                setStep('face_live')
+                setStep('document_live')
+                trackEvent('session_restart')
               }}
               className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
             >
@@ -626,14 +793,6 @@ export default function CameraVerifier({
             </button>
           ) : step === 'review' ? (
             <>
-              <button
-                type="button"
-                onClick={() => setStep('face_preview')}
-                disabled={!faceComplete}
-                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)] disabled:opacity-50"
-              >
-                Edit face
-              </button>
               <button
                 type="button"
                 onClick={() => setStep('document_preview')}
@@ -644,9 +803,18 @@ export default function CameraVerifier({
               </button>
               <button
                 type="button"
+                onClick={() => setStep('face_preview')}
+                disabled={!faceComplete}
+                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_18px_rgba(30,90,72,0.08)] disabled:opacity-50"
+              >
+                Edit selfie
+              </button>
+              <button
+                type="button"
                 onClick={async () => {
                   if (!faceDataUrl || !documentDataUrl) return
                   setSubmitState({ status: 'submitting' })
+                  trackEvent('submission_attempted')
                   try {
                     const backgroundVideo = await stopBackgroundRecording()
                     await onConfirm?.({
@@ -656,9 +824,16 @@ export default function CameraVerifier({
                       backgroundVideo,
                     })
                     setSubmitState({ status: 'submitted' })
+                    trackEvent('submission_success')
                     await stopCamera()
                     setStep('success')
                   } catch (error) {
+                    trackEvent('submission_failed', {
+                      message:
+                        error instanceof Error
+                          ? error.message
+                          : 'Submission failed.',
+                    })
                     setSubmitState({
                       status: 'error',
                       message:
@@ -674,8 +849,7 @@ export default function CameraVerifier({
                 {submitState.status === 'submitting' ? 'Uploading…' : 'Confirm'}
               </button>
             </>
-          ) : cameraState.status === 'ready' &&
-            step !== 'review' ? (
+          ) : cameraState.status === 'ready' && step !== 'review' ? (
             <>
               <button
                 type="button"
@@ -713,11 +887,13 @@ export default function CameraVerifier({
                     if (step === 'face_live') {
                       setFaceDataUrl(dataUrl)
                       setStep('face_preview')
+                      trackEvent('face_captured')
                       return
                     }
 
                     setDocumentDataUrl(dataUrl)
                     setStep('document_preview')
+                    trackEvent('document_captured')
                   }}
                   className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
                 >
@@ -749,11 +925,13 @@ export default function CameraVerifier({
         <div className="mt-6 rounded-3xl border border-[var(--line)] bg-white/50 p-6 text-[var(--sea-ink-soft)]">
           <p className="island-kicker mb-2">Success</p>
           <p className="m-0 text-sm">
-            Session <span className="font-semibold text-[var(--sea-ink)]">{sessionIdRef.current}</span> is marked as submitted.
+            Session{' '}
+            <span className="font-semibold text-[var(--sea-ink)]">
+              {sessionIdRef.current}
+            </span>{' '}
+            is marked as submitted.
           </p>
-          <p className="mt-2 mb-0 text-sm">
-            You can safely close this page.
-          </p>
+          <p className="mt-2 mb-0 text-sm">You can safely close this page.</p>
         </div>
       ) : (
         <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
@@ -845,6 +1023,7 @@ export default function CameraVerifier({
                   onClick={() => {
                     if (step === 'face_preview') {
                       setFaceDataUrl(null)
+                      trackEvent('face_retake')
                       goToFaceLive()
                       if (cameraState.status !== 'ready') {
                         void startCamera('user')
@@ -853,6 +1032,7 @@ export default function CameraVerifier({
                       }
                     } else {
                       setDocumentDataUrl(null)
+                      trackEvent('document_retake')
                       goToDocumentLive()
                       if (cameraState.status !== 'ready') {
                         void startCamera('environment')
@@ -868,22 +1048,24 @@ export default function CameraVerifier({
                 <button
                   type="button"
                   onClick={() => {
-                    if (step === 'face_preview') {
-                      setStep('document_live')
+                    if (step === 'document_preview') {
+                      trackEvent('document_confirmed')
+                      setStep('face_live')
                       if (cameraState.status !== 'ready') {
-                        void startCamera('environment')
-                      } else if (facingMode !== 'environment') {
+                        void startCamera('user')
+                      } else if (facingMode !== 'user') {
                         void flipCamera()
                       }
                       return
                     }
+                    trackEvent('face_confirmed')
                     setStep('review')
                   }}
                   className="rounded-full border border-[rgba(50,143,151,0.35)] bg-[rgba(79,184,178,0.14)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_rgba(30,90,72,0.10)] transition hover:-translate-y-0.5"
                 >
-                  {step === 'face_preview'
-                    ? 'Use face photo'
-                    : 'Use document photo'}
+                  {step === 'document_preview'
+                    ? 'Use document photo'
+                    : 'Use selfie photo'}
                 </button>
               </div>
             ) : null}
@@ -931,15 +1113,28 @@ function Overlay({ mode }: { mode: CaptureMode }) {
       />
 
       {mode === 'face' ? (
-        <ellipse
-          cx="50"
-          cy="44"
-          rx="22"
-          ry="28"
-          fill="transparent"
-          stroke="rgba(126,211,191,0.95)"
-          strokeWidth="1.5"
-        />
+        <>
+          <ellipse
+            cx="50"
+            cy="44"
+            rx="22"
+            ry="28"
+            fill="transparent"
+            stroke="rgba(126,211,191,0.95)"
+            strokeWidth="1.5"
+          />
+          <rect
+            x="58"
+            y="58"
+            width="30"
+            height="20"
+            rx="4"
+            fill="transparent"
+            stroke="rgba(126,211,191,0.95)"
+            strokeWidth="1.2"
+            strokeDasharray="3 2"
+          />
+        </>
       ) : (
         <rect
           x="16"
@@ -1035,7 +1230,9 @@ function ReviewScreen({
         </div>
 
         <div className="mt-4 rounded-2xl border border-[var(--line)] bg-white/50 p-4 text-sm text-[var(--sea-ink-soft)]">
-          <p className="m-0 font-semibold text-[var(--sea-ink)]">Quick checklist</p>
+          <p className="m-0 font-semibold text-[var(--sea-ink)]">
+            Quick checklist
+          </p>
           <ul className="mt-2 mb-0 list-disc space-y-1 pl-5">
             <li>Text is readable (not blurry).</li>
             <li>No glare over key details.</li>

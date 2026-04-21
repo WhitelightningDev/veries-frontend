@@ -1,4 +1,10 @@
-Welcome to your new TanStack Start app! 
+# Veries Frontend — Identity Verification UX Enhancement
+
+Guided, in-browser capture flow for:
+
+- ID document photo (document mode)
+- Selfie holding the ID (selfie mode)
+- Review + submit (uploads ID + selfie + optional background video)
 
 # Getting Started
 
@@ -9,6 +15,8 @@ npm install
 npm run dev
 ```
 
+Open `http://localhost:3000/` for the verification flow.
+
 # Building For Production
 
 To build this application for production:
@@ -18,6 +26,7 @@ npm run build
 ```
 
 ## Testing
+
 This project does not include a test suite.
 
 ## Styling
@@ -43,7 +52,6 @@ npm run format
 npm run check
 ```
 
-
 ## Shadcn
 
 Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
@@ -51,7 +59,6 @@ Add components using the latest version of [Shadcn](https://ui.shadcn.com/).
 ```bash
 pnpm dlx shadcn@latest add button
 ```
-
 
 ## Routing
 
@@ -70,7 +77,7 @@ Now that you have two routes you can use a `Link` component to navigate between 
 To use SPA (Single Page Application) navigation you will need to import the `Link` component from `@tanstack/react-router`.
 
 ```tsx
-import { Link } from "@tanstack/react-router";
+import { Link } from '@tanstack/react-router'
 ```
 
 Then anywhere in your JSX you can use it like so:
@@ -138,11 +145,11 @@ const getServerTime = createServerFn({
 // Use in a component
 function MyComponent() {
   const [time, setTime] = useState('')
-  
+
   useEffect(() => {
     getServerTime().then(setTime)
   }, [])
-  
+
   return <div>Server time: {time}</div>
 }
 ```
@@ -204,4 +211,5 @@ Files prefixed with `demo` can be safely deleted. They are there to provide a st
 You can learn more about all of the offerings from TanStack in the [TanStack documentation](https://tanstack.com).
 
 For TanStack Start specific documentation, visit [TanStack Start](https://tanstack.com/start).
+
 # veries-frontend
