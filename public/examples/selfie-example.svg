@@ -1,0 +1,92 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 900 560"
+  role="img"
+  aria-label="Example of a selfie holding an ID"
+>
+  <defs>
+    <linearGradient id="bg2" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#f2f7ff" />
+      <stop offset="1" stop-color="#eef6f1" />
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9" />
+      <stop offset="1" stop-color="#f7fbff" stop-opacity="0.9" />
+    </linearGradient>
+    <linearGradient id="id" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#f4f7ff" />
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="560" rx="40" fill="url(#bg2)" />
+
+  <rect
+    x="110"
+    y="90"
+    width="680"
+    height="380"
+    rx="34"
+    fill="url(#bubble)"
+    stroke="#cfe2d6"
+    stroke-width="6"
+  />
+
+  <!-- head -->
+  <circle cx="380" cy="235" r="95" fill="#d8e6ff" />
+  <circle cx="345" cy="225" r="12" fill="#6b7aa7" opacity="0.7" />
+  <circle cx="415" cy="225" r="12" fill="#6b7aa7" opacity="0.7" />
+  <path
+    d="M345 265c22 18 68 18 90 0"
+    fill="none"
+    stroke="#6b7aa7"
+    stroke-width="12"
+    stroke-linecap="round"
+    opacity="0.7"
+  />
+
+  <!-- shoulders -->
+  <path
+    d="M250 420c30-95 110-150 190-150s160 55 190 150"
+    fill="#e7eefc"
+  />
+
+  <!-- ID card -->
+  <rect
+    x="520"
+    y="265"
+    width="230"
+    height="150"
+    rx="20"
+    fill="url(#id)"
+    stroke="#cdd8f2"
+    stroke-width="6"
+  />
+  <rect x="540" y="290" width="70" height="70" rx="12" fill="#e7eefc" />
+  <rect x="625" y="292" width="110" height="16" rx="8" fill="#dbe6ff" />
+  <rect x="625" y="322" width="92" height="12" rx="6" fill="#e3ecff" />
+  <rect x="625" y="346" width="102" height="12" rx="6" fill="#e3ecff" />
+  <rect x="540" y="372" width="195" height="12" rx="6" fill="#eaf1ff" />
+
+  <!-- hand hint -->
+  <path
+    d="M515 410c30-35 68-54 115-54"
+    fill="none"
+    stroke="#9db3df"
+    stroke-width="14"
+    stroke-linecap="round"
+    opacity="0.85"
+  />
+
+  <text
+    x="450"
+    y="515"
+    text-anchor="middle"
+    font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial"
+    font-size="22"
+    fill="#6b7aa7"
+  >
+    Example: Face visible + ID readable in the same shot
+  </text>
+</svg>
+
