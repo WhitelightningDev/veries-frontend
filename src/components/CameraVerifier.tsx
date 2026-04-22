@@ -347,6 +347,7 @@ function faceCropInViewBox(): CropRect {
 function mapCoverRectToVideoRect(
   video: HTMLVideoElement,
   rectInView: CropRect,
+  mirrored?: boolean,
 ): CropRect | null {
   const bounds = video.getBoundingClientRect()
   const containerW = bounds.width
@@ -355,16 +356,23 @@ function mapCoverRectToVideoRect(
   const videoH = video.videoHeight
   if (!containerW || !containerH || !videoW || !videoH) return null
 
+  const rect = mirrored
+    ? {
+        ...rectInView,
+        x: 1 - (rectInView.x + rectInView.width),
+      }
+    : rectInView
+
   const scale = Math.max(containerW / videoW, containerH / videoH)
   const displayedW = videoW * scale
   const displayedH = videoH * scale
   const offsetX = (displayedW - containerW) / 2
   const offsetY = (displayedH - containerH) / 2
 
-  const x = rectInView.x * containerW
-  const y = rectInView.y * containerH
-  const w = rectInView.width * containerW
-  const h = rectInView.height * containerH
+  const x = rect.x * containerW
+  const y = rect.y * containerH
+  const w = rect.width * containerW
+  const h = rect.height * containerH
 
   const sx = clamp((x + offsetX) / scale, 0, videoW - 1)
   const sy = clamp((y + offsetY) / scale, 0, videoH - 1)
@@ -382,6 +390,7 @@ function mapCoverRectToVideoRect(
 function mapVideoRectToCoverRect(
   video: HTMLVideoElement,
   rectInVideo: CropRect,
+  mirrored?: boolean,
 ): CropRect | null {
   const bounds = video.getBoundingClientRect()
   const containerW = bounds.width
@@ -406,15 +415,24 @@ function mapVideoRectToCoverRect(
   const dw = w * scale
   const dh = h * scale
 
-  return normalizeRect({
+  const rect = normalizeRect({
     x: dx / containerW,
     y: dy / containerH,
     width: dw / containerW,
     height: dh / containerH,
   })
+  if (!mirrored) return rect
+  return {
+    ...rect,
+    x: 1 - (rect.x + rect.width),
+  }
 }
 
-function mapVideoQuadToCoverQuad(video: HTMLVideoElement, quad: Quad): Quad | null {
+function mapVideoQuadToCoverQuad(
+  video: HTMLVideoElement,
+  quad: Quad,
+  mirrored?: boolean,
+): Quad | null {
   const bounds = video.getBoundingClientRect()
   const containerW = bounds.width
   const containerH = bounds.height
@@ -437,7 +455,17 @@ function mapVideoQuadToCoverQuad(video: HTMLVideoElement, quad: Quad): Quad | nu
     }
   }
 
-  return [toView(quad[0]), toView(quad[1]), toView(quad[2]), toView(quad[3])]
+  const mapped = [
+    toView(quad[0]),
+    toView(quad[1]),
+    toView(quad[2]),
+    toView(quad[3]),
+  ]
+  const maybeMirrored = mirrored
+    ? mapped.map((p) => ({ x: 1 - p.x, y: p.y }))
+    : mapped
+  const ordered = orderQuadPoints(maybeMirrored)
+  return ordered ?? (maybeMirrored as unknown as Quad)
 }
 
 function getErrorMessage(error: unknown) {
@@ -479,6 +507,10 @@ async function listVideoInputs() {
   } catch {
     return []
   }
+}
+
+function hasLiveVideoTrack(stream: MediaStream | null) {
+  return Boolean(stream?.getVideoTracks().some((t) => t.readyState === 'live'))
 }
 
 export default function CameraVerifier({
@@ -678,6 +710,24 @@ export default function CameraVerifier({
     }, 350)
 
     return () => window.clearTimeout(id)
+  }, [cameraState.status, step])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const isLive =
+      step === 'document_front_live' ||
+      step === 'document_back_live' ||
+      step === 'selfie_live'
+    if (!isLive) return
+    if (cameraState.status !== 'ready') return
+
+    const stream = streamRef.current
+    const video = videoRef.current
+    if (!stream || !video) return
+    if (video.srcObject !== stream) {
+      video.srcObject = stream
+      void video.play().catch(() => {})
+    }
   }, [cameraState.status, step])
 
   useEffect(() => {
@@ -1257,10 +1307,12 @@ export default function CameraVerifier({
     const height = video.videoHeight
     if (!width || !height) return null
 
+    const mirrored = facingMode === 'user'
     const crop =
       mode === 'document'
-        ? (documentDetectRectRef.current ?? OVERLAY_GEOMETRY.document.crop)
-        : mapCoverRectToVideoRect(video, faceCropInViewBox())
+        ? (documentDetectRectRef.current ??
+          mapCoverRectToVideoRect(video, OVERLAY_GEOMETRY.document.crop, mirrored))
+        : mapCoverRectToVideoRect(video, faceCropInViewBox(), mirrored)
     const sx = crop ? Math.round(crop.x * width) : 0
     const sy = crop ? Math.round(crop.y * height) : 0
     const sw = crop ? Math.round(crop.width * width) : width
@@ -1471,68 +1523,68 @@ export default function CameraVerifier({
     }
   }
 
-  function handlePreviewRetake() {
-	    if (step === 'selfie_preview') {
-	      setSelfieDataUrl(null)
-	      setSelfieQuality(null)
-	      trackEvent('selfie_retake')
-	      setStep('selfie_live')
-	      if (cameraState.status !== 'ready') {
-	        void startCamera('user')
-	      } else if (facingMode !== 'user') {
-        void flipCamera()
-      }
-      return
-    }
+	  function handlePreviewRetake() {
+		    if (step === 'selfie_preview') {
+		      setSelfieDataUrl(null)
+		      setSelfieQuality(null)
+		      trackEvent('selfie_retake')
+		      setStep('selfie_live')
+		      if (cameraState.status !== 'ready' || !hasLiveVideoTrack(streamRef.current)) {
+		        void startCamera('user')
+		      } else if (facingMode !== 'user') {
+	        void flipCamera()
+	      }
+	      return
+	    }
 
+		    if (step === 'document_front_preview') {
+		      setDocumentFrontDataUrl(null)
+		      setDocumentFrontQuality(null)
+		      trackEvent('document_front_retake')
+		      setStep('document_front_live')
+		      if (cameraState.status !== 'ready' || !hasLiveVideoTrack(streamRef.current)) {
+		        void startCamera('environment')
+		      } else if (facingMode !== 'environment') {
+	        void flipCamera()
+	      }
+	      return
+	    }
+
+		    if (step === 'document_back_preview') {
+		      setDocumentBackDataUrl(null)
+		      setDocumentBackQuality(null)
+		      trackEvent('document_back_retake')
+		      setStep('document_back_live')
+		      if (cameraState.status !== 'ready' || !hasLiveVideoTrack(streamRef.current)) {
+		        void startCamera('environment')
+		      } else if (facingMode !== 'environment') {
+	        void flipCamera()
+	      }
+	    }
+	  }
+
+	  function handlePreviewConfirm() {
 	    if (step === 'document_front_preview') {
-	      setDocumentFrontDataUrl(null)
-	      setDocumentFrontQuality(null)
-	      trackEvent('document_front_retake')
-	      setStep('document_front_live')
-	      if (cameraState.status !== 'ready') {
+	      trackEvent('document_front_confirmed')
+	      setStep('document_back_live')
+	      if (cameraState.status !== 'ready' || !hasLiveVideoTrack(streamRef.current)) {
 	        void startCamera('environment')
 	      } else if (facingMode !== 'environment') {
-        void flipCamera()
-      }
-      return
-    }
+	        void flipCamera()
+	      }
+	      return
+	    }
 
 	    if (step === 'document_back_preview') {
-	      setDocumentBackDataUrl(null)
-	      setDocumentBackQuality(null)
-	      trackEvent('document_back_retake')
-	      setStep('document_back_live')
-	      if (cameraState.status !== 'ready') {
-	        void startCamera('environment')
-	      } else if (facingMode !== 'environment') {
-        void flipCamera()
-      }
-    }
-  }
-
-  function handlePreviewConfirm() {
-    if (step === 'document_front_preview') {
-      trackEvent('document_front_confirmed')
-      setStep('document_back_live')
-      if (cameraState.status !== 'ready') {
-        void startCamera('environment')
-      } else if (facingMode !== 'environment') {
-        void flipCamera()
-      }
-      return
-    }
-
-    if (step === 'document_back_preview') {
-      trackEvent('document_back_confirmed')
-      setStep('selfie_live')
-      if (cameraState.status !== 'ready') {
-        void startCamera('user')
-      } else if (facingMode !== 'user') {
-        void flipCamera()
-      }
-      return
-    }
+	      trackEvent('document_back_confirmed')
+	      setStep('selfie_live')
+	      if (cameraState.status !== 'ready' || !hasLiveVideoTrack(streamRef.current)) {
+	        void startCamera('user')
+	      } else if (facingMode !== 'user') {
+	        void flipCamera()
+	      }
+	      return
+	    }
 
     if (step === 'selfie_preview') {
       trackEvent('selfie_confirmed')
@@ -1636,35 +1688,72 @@ export default function CameraVerifier({
     const video = videoRef.current
     if (!canvas || !video) return
 
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
-    if (!ctx) return
+	    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+	    if (!ctx) return
 
-    const scanWidth = 320
-    const scanHeight = 240
-    canvas.width = scanWidth
-    canvas.height = scanHeight
+	    const scanMaxDim = 360
+	    const ensureCanvasSize = (w: number, h: number) => {
+	      const nextW = Math.max(120, Math.round(w))
+	      const nextH = Math.max(120, Math.round(h))
+	      if (canvas.width !== nextW) canvas.width = nextW
+	      if (canvas.height !== nextH) canvas.height = nextH
+	    }
 
-	    let lastRect: CropRect | null = null
-	    let lastQuad: Quad | null = null
-	    let lastUpdateAt = 0
-	    let lastConfidenceUpdateAt = 0
-	    let stableFrames = 0
+	    const computeScanSize = (srcW: number, srcH: number) => {
+	      if (srcW <= 0 || srcH <= 0) return { w: 320, h: 240 }
+	      if (srcW >= srcH) {
+	        const w = scanMaxDim
+	        const h = Math.max(120, Math.round((scanMaxDim * srcH) / srcW))
+	        return { w, h }
+	      }
+	      const h = scanMaxDim
+	      const w = Math.max(120, Math.round((scanMaxDim * srcW) / srcH))
+	      return { w, h }
+	    }
 
-    const scanOnce = () => {
-      if (!video.videoWidth || !video.videoHeight) return
+		    let lastRect: CropRect | null = null
+		    let lastQuad: Quad | null = null
+		    let lastUpdateAt = 0
+		    let lastConfidenceUpdateAt = 0
+		    let stableFrames = 0
 
-      ctx.save()
-      if (facingMode === 'user') {
-        ctx.translate(scanWidth, 0)
-        ctx.scale(-1, 1)
-      }
-      ctx.drawImage(video, 0, 0, scanWidth, scanHeight)
-      ctx.restore()
-      const image = ctx.getImageData(0, 0, scanWidth, scanHeight)
-      const data = image.data
+	    const scanOnce = () => {
+	      const videoW = video.videoWidth
+	      const videoH = video.videoHeight
+	      if (!videoW || !videoH) return
 
-      const cv = cvRef.current
-      if (
+	      const crop =
+	        mapCoverRectToVideoRect(
+	          video,
+	          OVERLAY_GEOMETRY.document.crop,
+	          facingMode === 'user',
+	        ) ?? ({ x: 0, y: 0, width: 1, height: 1 } satisfies CropRect)
+
+	      const sx = clamp(Math.round(crop.x * videoW), 0, Math.max(0, videoW - 2))
+	      const sy = clamp(Math.round(crop.y * videoH), 0, Math.max(0, videoH - 2))
+	      const sw = clamp(
+	        Math.round(crop.width * videoW),
+	        2,
+	        Math.max(2, videoW - sx),
+	      )
+	      const sh = clamp(
+	        Math.round(crop.height * videoH),
+	        2,
+	        Math.max(2, videoH - sy),
+	      )
+
+	      const { w, h } = computeScanSize(sw, sh)
+	      ensureCanvasSize(w, h)
+
+	      const scanWidth = canvas.width
+	      const scanHeight = canvas.height
+
+	      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, scanWidth, scanHeight)
+	      const image = ctx.getImageData(0, 0, scanWidth, scanHeight)
+	      const data = image.data
+
+	      const cv = cvRef.current
+	      if (
         cvStatus === 'ready' &&
         cv &&
         typeof cv.matFromImageData === 'function'
@@ -1694,8 +1783,13 @@ export default function CameraVerifier({
             cv.CHAIN_APPROX_SIMPLE,
           )
 
-          let bestQuad: Quad | null = null
-          let bestScore = 0
+	          let bestQuad: Quad | null = null
+	          let bestScore = 0
+	          const distPx = (a: Point, b: Point) =>
+	            Math.hypot(
+	              (a.x - b.x) * scanWidth,
+	              (a.y - b.y) * scanHeight,
+	            )
 
           for (let i = 0; i < contours.size(); i++) {
             const contour = contours.get(i)
@@ -1707,7 +1801,7 @@ export default function CameraVerifier({
               if (approx.rows === 4 && cv.isContourConvex(approx)) {
                 const area = cv.contourArea(approx)
                 const areaNorm = area / (scanWidth * scanHeight)
-                if (areaNorm > 0.12) {
+	                if (areaNorm > 0.08) {
                   const pts: Point[] = []
                   const arr = approx.data32S as Int32Array
                   for (let j = 0; j < arr.length; j += 2) {
@@ -1716,15 +1810,15 @@ export default function CameraVerifier({
                       y: arr[j + 1] / scanHeight,
                     })
                   }
-                  const ordered = orderQuadPoints(pts)
-                  if (ordered) {
-                    const topW = dist(ordered[0], ordered[1])
-                    const botW = dist(ordered[3], ordered[2])
-                    const leftH = dist(ordered[0], ordered[3])
-                    const rightH = dist(ordered[1], ordered[2])
-                    const w = (topW + botW) / 2
-                    const h = (leftH + rightH) / 2
-                    const aspect = w / Math.max(1e-6, h)
+	                  const ordered = orderQuadPoints(pts)
+	                  if (ordered) {
+	                    const topW = distPx(ordered[0], ordered[1])
+	                    const botW = distPx(ordered[3], ordered[2])
+	                    const leftH = distPx(ordered[0], ordered[3])
+	                    const rightH = distPx(ordered[1], ordered[2])
+	                    const w = (topW + botW) / 2
+	                    const h = (leftH + rightH) / 2
+	                    const aspect = w / Math.max(1e-6, h)
                     const aspectScore = clamp(
                       Math.min(
                         aspect / DOCUMENT_TARGET_ASPECT,
@@ -1766,23 +1860,32 @@ export default function CameraVerifier({
 	            }
 	          }
 
-	          if (bestQuad && confidence >= 0.45) {
-            if (lastQuad) {
-              const delta = quadDelta(lastQuad, bestQuad)
-              if (delta < 0.06) {
-                stableFrames = Math.min(6, stableFrames + 1)
-              } else {
-                stableFrames = Math.max(0, stableFrames - 1)
-              }
-            } else {
-              stableFrames = 1
-            }
-
-            const alpha = stableFrames >= 3 ? 0.35 : 0.22
-            lastQuad = lastQuad ? quadLerp(lastQuad, bestQuad, alpha) : bestQuad
-            documentDetectQuadRef.current = lastQuad
-            const rectFromQuad = quadBoundingRect(lastQuad)
-            documentDetectRectRef.current = rectFromQuad
+			          if (bestQuad && confidence >= 0.45) {
+			            const toVideo = (p: Point): Point => ({
+			              x: crop.x + p.x * crop.width,
+			              y: crop.y + p.y * crop.height,
+			            })
+			            const mapped = bestQuad.map(toVideo)
+			            const bestQuadVideo =
+			              orderQuadPoints(mapped) ?? (mapped as unknown as Quad)
+		            if (lastQuad) {
+		              const delta = quadDelta(lastQuad, bestQuadVideo)
+		              if (delta < 0.06) {
+	                stableFrames = Math.min(6, stableFrames + 1)
+	              } else {
+	                stableFrames = Math.max(0, stableFrames - 1)
+	              }
+	            } else {
+	              stableFrames = 1
+	            }
+	
+	            const alpha = stableFrames >= 3 ? 0.35 : 0.22
+	            lastQuad = lastQuad
+	              ? quadLerp(lastQuad, bestQuadVideo, alpha)
+	              : bestQuadVideo
+	            documentDetectQuadRef.current = lastQuad
+	            const rectFromQuad = quadBoundingRect(lastQuad)
+	            documentDetectRectRef.current = rectFromQuad
 
 	            const now = window.performance.now()
 	            if (now - lastUpdateAt > 120) {
@@ -1936,7 +2039,8 @@ export default function CameraVerifier({
         height: heightPx / scanHeight,
       }
 
-      const aspect = raw.width / Math.max(1e-6, raw.height)
+	      const aspect =
+	        (raw.width * scanWidth) / Math.max(1e-6, raw.height * scanHeight)
       const aspectScore = clamp(
         Math.min(
           aspect / DOCUMENT_TARGET_ASPECT,
@@ -1977,35 +2081,45 @@ export default function CameraVerifier({
         height: raw.height + pad * 2,
       })
 
-      const cx = rect.x + rect.width / 2
-      const cy = rect.y + rect.height / 2
-      const desiredHeight = rect.width / DOCUMENT_TARGET_ASPECT
-      if (Math.abs(desiredHeight - rect.height) / rect.height > 0.08) {
-        rect = normalizeRect({
-          x: rect.x,
-          y: cy - desiredHeight / 2,
-          width: rect.width,
-          height: desiredHeight,
-        })
-      }
+	      const cx = rect.x + rect.width / 2
+	      const cy = rect.y + rect.height / 2
+	      const desiredHeight =
+	        (rect.width * scanWidth) / (DOCUMENT_TARGET_ASPECT * scanHeight)
+	      if (Math.abs(desiredHeight - rect.height) / rect.height > 0.08) {
+	        rect = normalizeRect({
+	          x: rect.x,
+	          y: cy - desiredHeight / 2,
+	          width: rect.width,
+	          height: desiredHeight,
+	        })
+	      }
 
-      if (lastRect) {
-        const dx = Math.abs(rect.x - lastRect.x) + Math.abs(rect.y - lastRect.y)
-        const ds =
-          Math.abs(rect.width - lastRect.width) +
-          Math.abs(rect.height - lastRect.height)
-        if (dx + ds < 0.03) {
-          stableFrames = Math.min(6, stableFrames + 1)
-        } else {
-          stableFrames = Math.max(0, stableFrames - 1)
-        }
-      } else {
-        stableFrames = 1
-      }
+	      const rectInVideo = normalizeRect({
+	        x: crop.x + rect.x * crop.width,
+	        y: crop.y + rect.y * crop.height,
+	        width: rect.width * crop.width,
+	        height: rect.height * crop.height,
+	      })
 
-      const alpha = stableFrames >= 3 ? 0.35 : 0.22
-      lastRect = lastRect ? rectLerp(lastRect, rect, alpha) : rect
-      documentDetectRectRef.current = lastRect
+	      if (lastRect) {
+	        const dx =
+	          Math.abs(rectInVideo.x - lastRect.x) +
+	          Math.abs(rectInVideo.y - lastRect.y)
+	        const ds =
+	          Math.abs(rectInVideo.width - lastRect.width) +
+	          Math.abs(rectInVideo.height - lastRect.height)
+	        if (dx + ds < 0.03) {
+	          stableFrames = Math.min(6, stableFrames + 1)
+	        } else {
+	          stableFrames = Math.max(0, stableFrames - 1)
+	        }
+	      } else {
+	        stableFrames = 1
+	      }
+
+	      const alpha = stableFrames >= 3 ? 0.35 : 0.22
+	      lastRect = lastRect ? rectLerp(lastRect, rectInVideo, alpha) : rectInVideo
+	      documentDetectRectRef.current = lastRect
 
 	      const now = window.performance.now()
 	      if (now - lastUpdateAt > 120) {
@@ -2144,19 +2258,25 @@ export default function CameraVerifier({
 	          ? selfieQuality
 	          : null
 
-	  const displayDocumentRect = useMemo(() => {
-	    if (typeof window === 'undefined') return documentDetectRect
-	    const video = videoRef.current
-	    if (!video || !documentDetectRect) return documentDetectRect
-	    return mapVideoRectToCoverRect(video, documentDetectRect) ?? documentDetectRect
-	  }, [documentDetectRect])
+		  const displayDocumentRect = useMemo(() => {
+		    if (typeof window === 'undefined') return documentDetectRect
+		    const video = videoRef.current
+		    if (!video || !documentDetectRect) return documentDetectRect
+		    return (
+		      mapVideoRectToCoverRect(video, documentDetectRect, facingMode === 'user') ??
+		      documentDetectRect
+		    )
+		  }, [documentDetectRect, facingMode])
 
-	  const displayDocumentQuad = useMemo(() => {
-	    if (typeof window === 'undefined') return documentDetectQuad
-	    const video = videoRef.current
-	    if (!video || !documentDetectQuad) return documentDetectQuad
-	    return mapVideoQuadToCoverQuad(video, documentDetectQuad) ?? documentDetectQuad
-	  }, [documentDetectQuad])
+		  const displayDocumentQuad = useMemo(() => {
+		    if (typeof window === 'undefined') return documentDetectQuad
+		    const video = videoRef.current
+		    if (!video || !documentDetectQuad) return documentDetectQuad
+		    return (
+		      mapVideoQuadToCoverQuad(video, documentDetectQuad, facingMode === 'user') ??
+		      documentDetectQuad
+		    )
+		  }, [documentDetectQuad, facingMode])
 
 	  const primaryActionLabel =
 	    step === 'selfie_live'
@@ -2445,7 +2565,7 @@ export default function CameraVerifier({
           {step === 'intro' ? null : stepper}
 
           {step === 'success' ? null : step === 'review' ? (
-            <>
+	        <>
               <button
                 type="button"
                 onClick={() => setStep('document_front_preview')}
@@ -2533,16 +2653,18 @@ export default function CameraVerifier({
                   ) : null}
                 </>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => startCamera()}
-                  disabled={cameraState.status === 'starting'}
-                  className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5 disabled:opacity-60"
-                >
-                  {cameraState.status === 'starting'
-                    ? 'Starting…'
-                    : 'Start camera'}
-                </button>
+	                <button
+	                  type="button"
+	                  onClick={() =>
+	                    startCamera(step === 'selfie_live' ? 'user' : 'environment')
+	                  }
+	                  disabled={cameraState.status === 'starting'}
+	                  className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5 disabled:opacity-60"
+	                >
+	                  {cameraState.status === 'starting'
+	                    ? 'Starting…'
+	                    : 'Start camera'}
+	                </button>
               )}
             </div>
           ) : null}
@@ -2642,24 +2764,22 @@ export default function CameraVerifier({
 
 	            <button
 	              type="button"
-	              disabled={!policiesAccepted && !bypassConsent}
 	              onClick={() => {
-	                if (bypassConsent && !policiesAccepted) {
-	                  setPoliciesAccepted(true)
-	                }
+	                if (!policiesAccepted) setPoliciesAccepted(true)
 	                trackEvent('intro_accepted')
 	                setStep('document_front_live')
 	                if (typeof window !== 'undefined') {
 	                  window.scrollTo({ top: 0, behavior: 'smooth' })
 	                }
 	              }}
-              className="mt-5 w-full rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] disabled:opacity-60"
-            >
+	              className="mt-5 w-full rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] disabled:opacity-60"
+	            >
 		              Next
 		            </button>
-		            {!policiesAccepted && !bypassConsent ? (
+		            {!policiesAccepted ? (
 		              <p className="mt-2 mb-0 text-xs leading-6 text-[rgba(140,30,30,0.9)]">
-		                Tick the consent box above to continue.
+		                You can tick the consent box above to record agreement, but
+		                you can also continue.
 		              </p>
 		            ) : null}
 
@@ -2767,40 +2887,40 @@ export default function CameraVerifier({
       ) : (
         <>
           <div className="mt-6 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="relative overflow-hidden rounded-2xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)] shadow-[0_18px_44px_var(--shadow-deep)]">
-              <div className="relative" style={{ aspectRatio: '4 / 5' }}>
-                {step === 'selfie_preview' && selfieDataUrl ? (
-                  <img
-                    src={selfieDataUrl}
-                    alt="Captured selfie preview"
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                ) : step === 'document_front_preview' &&
-                  documentFrontDataUrl ? (
-                  <img
-                    src={documentFrontDataUrl}
-                    alt="Captured ID front preview"
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                ) : step === 'document_back_preview' && documentBackDataUrl ? (
-                  <img
-                    src={documentBackDataUrl}
-                    alt="Captured ID back preview"
-                    className="absolute inset-0 h-full w-full object-cover"
-                  />
-                ) : (
-                  <video
-                    ref={videoRef}
-                    className={
-                      facingMode === 'user'
-                        ? 'absolute inset-0 h-full w-full object-cover [transform:scaleX(-1)]'
-                        : 'absolute inset-0 h-full w-full object-cover'
-                    }
-                    autoPlay
-                    playsInline
-                    muted
-                  />
-                )}
+	              <div className="relative overflow-hidden rounded-2xl border border-[var(--line)] bg-[color-mix(in_oklab,var(--sand)_70%,black_30%)] shadow-[0_18px_44px_var(--shadow-deep)]">
+	              <div className="relative" style={{ aspectRatio: '4 / 5' }}>
+	                <video
+	                  ref={videoRef}
+	                  className={[
+	                    'absolute inset-0 h-full w-full object-cover transition-opacity',
+	                    facingMode === 'user' ? '[transform:scaleX(-1)]' : '',
+	                    step.endsWith('_preview') ? 'opacity-0' : 'opacity-100',
+	                  ].join(' ')}
+	                  autoPlay
+	                  playsInline
+	                  muted
+	                />
+	                {step === 'selfie_preview' && selfieDataUrl ? (
+	                  <img
+	                    src={selfieDataUrl}
+	                    alt="Captured selfie preview"
+	                    className="absolute inset-0 h-full w-full object-cover"
+	                  />
+	                ) : null}
+	                {step === 'document_front_preview' && documentFrontDataUrl ? (
+	                  <img
+	                    src={documentFrontDataUrl}
+	                    alt="Captured ID front preview"
+	                    className="absolute inset-0 h-full w-full object-cover"
+	                  />
+	                ) : null}
+	                {step === 'document_back_preview' && documentBackDataUrl ? (
+	                  <img
+	                    src={documentBackDataUrl}
+	                    alt="Captured ID back preview"
+	                    className="absolute inset-0 h-full w-full object-cover"
+	                  />
+	                ) : null}
 
 	                {step === 'selfie_live' ||
 	                step === 'document_front_live' ||
@@ -2990,104 +3110,136 @@ export default function CameraVerifier({
             </aside>
           </div>
 
-          {step === 'selfie_live' ||
-          step === 'document_front_live' ||
-          step === 'document_back_live' ? (
-            <div className="sticky bottom-3 mt-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[var(--line)] bg-[var(--header-bg)] p-2 shadow-[0_18px_34px_var(--shadow-soft)] backdrop-blur sm:hidden">
-              <button
-                type="button"
-                onClick={() => {
-                  void stopCamera()
-                  openUploadPicker(
-                    step === 'selfie_live'
-                      ? 'selfie'
-                      : step === 'document_back_live'
-                        ? 'document_back'
-                        : 'document_front',
-                  )
-                }}
-                className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
-              >
-                Upload
-              </button>
+	          {step === 'selfie_live' ||
+	          step === 'document_front_live' ||
+	          step === 'document_back_live' ? (
+	            <>
+	              <div className="h-28 sm:hidden" aria-hidden="true" />
+	              <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--line)] bg-white/70 backdrop-blur-sm sm:hidden">
+	                <div className="page-wrap py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+	                  {cameraState.status === 'ready' ? (
+	                    <div className="grid gap-2">
+	                      <div className="grid grid-cols-3 gap-2">
+	                        <button
+	                          type="button"
+	                          onClick={() => {
+	                            void stopCamera()
+	                            openUploadPicker(
+	                              step === 'selfie_live'
+	                                ? 'selfie'
+	                                : step === 'document_back_live'
+	                                  ? 'document_back'
+	                                  : 'document_front',
+	                            )
+	                          }}
+	                          className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
+	                        >
+	                          Upload
+	                        </button>
+	                        <button
+	                          type="button"
+	                          onClick={flipCamera}
+	                          disabled={!canFlip}
+	                          className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] disabled:opacity-60"
+	                        >
+	                          Flip
+	                        </button>
+	                        <button
+	                          type="button"
+	                          onClick={stopCamera}
+	                          className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
+	                        >
+	                          Stop
+	                        </button>
+	                      </div>
+	                      <button
+	                        type="button"
+	                        onClick={handleCapture}
+	                        disabled={
+	                          (step === 'document_front_live' ||
+	                            step === 'document_back_live') &&
+	                          autoCaptureState.status !== 'idle'
+	                        }
+	                        className="w-full rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] disabled:opacity-60"
+	                      >
+	                        {step === 'document_front_live' ||
+	                        step === 'document_back_live'
+	                          ? autoCaptureState.status === 'countdown'
+	                            ? `Capturing in ${autoCaptureState.secondsLeft}…`
+	                            : autoCaptureState.status === 'capturing'
+	                              ? 'Capturing…'
+	                              : 'Capture now'
+	                          : 'Capture'}
+	                      </button>
+	                    </div>
+	                  ) : (
+	                    <div className="flex items-center gap-2">
+	                      <button
+	                        type="button"
+	                        onClick={() => {
+	                          void stopCamera()
+	                          openUploadPicker(
+	                            step === 'selfie_live'
+	                              ? 'selfie'
+	                              : step === 'document_back_live'
+	                                ? 'document_back'
+	                                : 'document_front',
+	                          )
+	                        }}
+	                        className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
+	                      >
+	                        Upload
+	                      </button>
+		                      <button
+		                        type="button"
+		                        onClick={() =>
+		                          startCamera(
+		                            step === 'selfie_live' ? 'user' : 'environment',
+		                          )
+		                        }
+		                        disabled={cameraState.status === 'starting'}
+		                        className="ml-auto rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] disabled:opacity-60"
+		                      >
+	                        {cameraState.status === 'starting'
+	                          ? 'Starting…'
+	                          : 'Start camera'}
+	                      </button>
+	                    </div>
+	                  )}
+	                </div>
+	              </div>
+	            </>
+	          ) : null}
 
-              {cameraState.status === 'ready' ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={flipCamera}
-                    disabled={!canFlip}
-                    className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)] disabled:opacity-60"
-                  >
-                    Flip
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stopCamera}
-                    className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
-                  >
-                    Stop
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCapture}
-                    disabled={
-                      (step === 'document_front_live' ||
-                        step === 'document_back_live') &&
-                      autoCaptureState.status !== 'idle'
-                    }
-                    className="ml-auto rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2 text-sm font-semibold text-[var(--lagoon-deep)] disabled:opacity-60"
-                  >
-                    {step === 'document_front_live' ||
-                    step === 'document_back_live'
-                      ? autoCaptureState.status === 'countdown'
-                        ? `Capturing in ${autoCaptureState.secondsLeft}…`
-                        : autoCaptureState.status === 'capturing'
-                          ? 'Capturing…'
-                          : 'Capture now'
-                      : 'Capture'}
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => startCamera()}
-                  disabled={cameraState.status === 'starting'}
-                  className="ml-auto rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2 text-sm font-semibold text-[var(--lagoon-deep)] disabled:opacity-60"
-                >
-                  {cameraState.status === 'starting' ? 'Starting…' : 'Start'}
-                </button>
-              )}
-              <div className="h-[env(safe-area-inset-bottom)] w-full" />
-            </div>
-          ) : null}
-
-          {step === 'selfie_preview' ||
-          step === 'document_front_preview' ||
-          step === 'document_back_preview' ? (
-            <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--line)] bg-white/70 backdrop-blur-sm sm:hidden">
-              <div className="page-wrap flex items-center justify-between gap-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-                <button
-                  type="button"
-                  onClick={handlePreviewRetake}
-                  className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
-                >
-                  Retake
-                </button>
-                <button
-                  type="button"
-                  onClick={handlePreviewConfirm}
-                  className="ml-auto rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)]"
-                >
-                  {step === 'document_front_preview'
-                    ? 'Use front'
-                    : step === 'document_back_preview'
-                      ? 'Use back'
-                      : 'Continue'}
-                </button>
-              </div>
-            </div>
-          ) : null}
+	          {step === 'selfie_preview' ||
+	          step === 'document_front_preview' ||
+	          step === 'document_back_preview' ? (
+	            <>
+	              <div className="h-24 sm:hidden" aria-hidden="true" />
+	              <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--line)] bg-white/70 backdrop-blur-sm sm:hidden">
+	                <div className="page-wrap flex items-center justify-between gap-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+	                  <button
+	                    type="button"
+	                    onClick={handlePreviewRetake}
+	                    className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
+	                  >
+	                    Retake
+	                  </button>
+	                  <button
+	                    type="button"
+	                    onClick={handlePreviewConfirm}
+	                    className="ml-auto rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)]"
+	                  >
+	                    {step === 'document_front_preview'
+	                      ? 'Use front'
+	                      : step === 'document_back_preview'
+	                        ? 'Use back'
+	                        : 'Continue'}
+	                  </button>
+	                </div>
+	              </div>
+	            </>
+	          ) : null}
         </>
       )}
     </section>
