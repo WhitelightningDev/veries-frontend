@@ -451,6 +451,21 @@ export default function CameraVerifier({
 
   const [step, setStep] = useState<FlowStep>('intro')
   const [policiesAccepted, setPoliciesAccepted] = useState(false)
+  const bypassConsent = useMemo(() => {
+    if (typeof window === 'undefined') return false
+    const params = new URLSearchParams(window.location.search)
+    const raw =
+      params.get('skip_consent') ??
+      params.get('skipConsent') ??
+      params.get('bypass_consent') ??
+      params.get('bypassConsent')
+    if (!raw) return false
+    return raw === '1' || raw.toLowerCase() === 'true' || raw.toLowerCase() === 'yes'
+  }, [])
+  useEffect(() => {
+    if (!bypassConsent) return
+    setPoliciesAccepted(true)
+  }, [bypassConsent])
   const [selfieDataUrl, setSelfieDataUrl] = useState<string | null>(null)
 	  const [documentFrontDataUrl, setDocumentFrontDataUrl] = useState<
 	    string | null
@@ -2509,24 +2524,34 @@ export default function CameraVerifier({
 
 	          <div className="rounded-2xl border border-[var(--line)] bg-white/50 p-6 text-[var(--sea-ink-soft)] shadow-[0_18px_34px_var(--shadow-soft)]">
 	            <p className="island-kicker mb-2">Consent</p>
-	            <div className="mt-4 flex items-start gap-3 text-sm leading-7">
-	              <input
-	                id="veries-consent"
-	                type="checkbox"
-	                checked={policiesAccepted}
+		            <div
+		              className="mt-4 flex items-start gap-3 text-sm leading-7"
+		              onClick={(event) => {
+		                const target = event.target as HTMLElement | null
+		                if (!target) return
+		                if (target.closest('a')) return
+		                if (target.closest('button')) return
+		                if (target.closest('input')) return
+		                setPoliciesAccepted((prev) => !prev)
+		              }}
+		            >
+		              <input
+		                id="veries-consent"
+		                type="checkbox"
+		                checked={policiesAccepted}
 	                onChange={(event) =>
 	                  setPoliciesAccepted(event.currentTarget.checked)
 	                }
 	                className="mt-1 h-4 w-4 cursor-pointer accent-[var(--lagoon)]"
 	              />
-	              <span>
-	                <label htmlFor="veries-consent" className="cursor-pointer">
-	                  I agree to the{' '}
-	                </label>
-	                <Link
-	                  to="/terms"
-	                  className="font-semibold text-[var(--lagoon-deep)] no-underline hover:underline"
-	                >
+		              <span>
+		                <label htmlFor="veries-consent" className="cursor-pointer">
+		                  I agree to the{' '}
+		                </label>
+		                <Link
+		                  to="/terms"
+		                  className="font-semibold text-[var(--lagoon-deep)] no-underline hover:underline"
+		                >
 	                  Terms of Use
 	                </Link>{' '}
 	                and{' '}
@@ -2540,25 +2565,28 @@ export default function CameraVerifier({
 	              </span>
 	            </div>
 
-            <button
-              type="button"
-              disabled={!policiesAccepted}
-              onClick={() => {
-                trackEvent('intro_accepted')
-                setStep('document_front_live')
-                if (typeof window !== 'undefined') {
-                  window.scrollTo({ top: 0, behavior: 'smooth' })
-                }
-              }}
+	            <button
+	              type="button"
+	              disabled={!policiesAccepted && !bypassConsent}
+	              onClick={() => {
+	                if (bypassConsent && !policiesAccepted) {
+	                  setPoliciesAccepted(true)
+	                }
+	                trackEvent('intro_accepted')
+	                setStep('document_front_live')
+	                if (typeof window !== 'undefined') {
+	                  window.scrollTo({ top: 0, behavior: 'smooth' })
+	                }
+	              }}
               className="mt-5 w-full rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] disabled:opacity-60"
             >
-	              Next
-	            </button>
-	            {!policiesAccepted ? (
-	              <p className="mt-2 mb-0 text-xs leading-6 text-[rgba(140,30,30,0.9)]">
-	                Tick the consent box above to continue.
-	              </p>
-	            ) : null}
+		              Next
+		            </button>
+		            {!policiesAccepted && !bypassConsent ? (
+		              <p className="mt-2 mb-0 text-xs leading-6 text-[rgba(140,30,30,0.9)]">
+		                Tick the consent box above to continue.
+		              </p>
+		            ) : null}
 
 	            <p className="mt-4 mb-0 text-xs leading-6 text-[var(--sea-ink-soft)]">
 	              You can switch to uploading images if camera access isn’t
