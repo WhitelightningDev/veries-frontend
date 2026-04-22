@@ -111,4 +111,3 @@ export async function writeSessionAsset(
   await writeFile(fullPath, bytes)
   return fullPath
 }
-

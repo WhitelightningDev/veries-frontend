@@ -1,7 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 
-import { markSessionSubmitted, writeSessionAsset } from '../../lib/server/verifyStore'
+import {
+  markSessionSubmitted,
+  writeSessionAsset,
+} from '../../lib/server/verifyStore'
 
 export const Route = createFileRoute('/api/verify')({
   component: () => null,
@@ -16,18 +19,28 @@ export const Route = createFileRoute('/api/verify')({
         const backgroundVideo = form.get('background_video')
 
         if (typeof sessionId !== 'string' || sessionId.length < 8) {
-          return json({ ok: false, error: 'Invalid session_id' }, { status: 400 })
+          return json(
+            { ok: false, error: 'Invalid session_id' },
+            { status: 400 },
+          )
         }
 
         if (!(faceImage instanceof File) || faceImage.size === 0) {
-          return json({ ok: false, error: 'Missing face_image' }, { status: 400 })
+          return json(
+            { ok: false, error: 'Missing face_image' },
+            { status: 400 },
+          )
         }
 
         if (!(documentImage instanceof File) || documentImage.size === 0) {
-          return json({ ok: false, error: 'Missing document_image' }, { status: 400 })
+          return json(
+            { ok: false, error: 'Missing document_image' },
+            { status: 400 },
+          )
         }
 
-        const backgroundFile = backgroundVideo instanceof File ? backgroundVideo : null
+        const backgroundFile =
+          backgroundVideo instanceof File ? backgroundVideo : null
 
         const [faceBytes, documentBytes, backgroundBytes] = await Promise.all([
           faceImage.arrayBuffer(),
