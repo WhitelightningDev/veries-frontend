@@ -379,6 +379,67 @@ function mapCoverRectToVideoRect(
   })
 }
 
+function mapVideoRectToCoverRect(
+  video: HTMLVideoElement,
+  rectInVideo: CropRect,
+): CropRect | null {
+  const bounds = video.getBoundingClientRect()
+  const containerW = bounds.width
+  const containerH = bounds.height
+  const videoW = video.videoWidth
+  const videoH = video.videoHeight
+  if (!containerW || !containerH || !videoW || !videoH) return null
+
+  const scale = Math.max(containerW / videoW, containerH / videoH)
+  const displayedW = videoW * scale
+  const displayedH = videoH * scale
+  const offsetX = (displayedW - containerW) / 2
+  const offsetY = (displayedH - containerH) / 2
+
+  const x = rectInVideo.x * videoW
+  const y = rectInVideo.y * videoH
+  const w = rectInVideo.width * videoW
+  const h = rectInVideo.height * videoH
+
+  const dx = x * scale - offsetX
+  const dy = y * scale - offsetY
+  const dw = w * scale
+  const dh = h * scale
+
+  return normalizeRect({
+    x: dx / containerW,
+    y: dy / containerH,
+    width: dw / containerW,
+    height: dh / containerH,
+  })
+}
+
+function mapVideoQuadToCoverQuad(video: HTMLVideoElement, quad: Quad): Quad | null {
+  const bounds = video.getBoundingClientRect()
+  const containerW = bounds.width
+  const containerH = bounds.height
+  const videoW = video.videoWidth
+  const videoH = video.videoHeight
+  if (!containerW || !containerH || !videoW || !videoH) return null
+
+  const scale = Math.max(containerW / videoW, containerH / videoH)
+  const displayedW = videoW * scale
+  const displayedH = videoH * scale
+  const offsetX = (displayedW - containerW) / 2
+  const offsetY = (displayedH - containerH) / 2
+
+  const toView = (p: Point) => {
+    const dx = p.x * videoW * scale - offsetX
+    const dy = p.y * videoH * scale - offsetY
+    return {
+      x: clamp(dx / containerW, 0, 1),
+      y: clamp(dy / containerH, 0, 1),
+    }
+  }
+
+  return [toView(quad[0]), toView(quad[1]), toView(quad[2]), toView(quad[3])]
+}
+
 function getErrorMessage(error: unknown) {
   if (error && typeof error === 'object' && 'name' in error) {
     const name = String((error as { name?: unknown }).name)
@@ -2083,6 +2144,20 @@ export default function CameraVerifier({
 	          ? selfieQuality
 	          : null
 
+	  const displayDocumentRect = useMemo(() => {
+	    if (typeof window === 'undefined') return documentDetectRect
+	    const video = videoRef.current
+	    if (!video || !documentDetectRect) return documentDetectRect
+	    return mapVideoRectToCoverRect(video, documentDetectRect) ?? documentDetectRect
+	  }, [documentDetectRect])
+
+	  const displayDocumentQuad = useMemo(() => {
+	    if (typeof window === 'undefined') return documentDetectQuad
+	    const video = videoRef.current
+	    if (!video || !documentDetectQuad) return documentDetectQuad
+	    return mapVideoQuadToCoverQuad(video, documentDetectQuad) ?? documentDetectQuad
+	  }, [documentDetectQuad])
+
 	  const primaryActionLabel =
 	    step === 'selfie_live'
 	      ? 'Capture'
@@ -2727,15 +2802,15 @@ export default function CameraVerifier({
                   />
                 )}
 
-                {step === 'selfie_live' ||
-                step === 'document_front_live' ||
-                step === 'document_back_live' ? (
-                  <Overlay
-                    mode={mode}
-                    documentRect={documentDetectRect}
-                    documentQuad={documentDetectQuad}
-                  />
-                ) : null}
+	                {step === 'selfie_live' ||
+	                step === 'document_front_live' ||
+	                step === 'document_back_live' ? (
+	                  <Overlay
+	                    mode={mode}
+	                    documentRect={displayDocumentRect}
+	                    documentQuad={displayDocumentQuad}
+	                  />
+	                ) : null}
 
                 <div className="absolute left-4 top-4 rounded-full border border-[rgba(255,255,255,0.25)] bg-[rgba(15,27,31,0.55)] px-3 py-1.5 text-xs font-semibold tracking-wide text-white">
                   {mode === 'face'
