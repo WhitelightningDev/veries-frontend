@@ -16,8 +16,9 @@ export type VerifySessionRecord = {
   submitted_at: number | null
   events: VerifyEvent[]
   assets: {
-    face_image_bytes: number | null
-    document_image_bytes: number | null
+    selfie_image_bytes: number | null
+    document_front_image_bytes: number | null
+    document_back_image_bytes: number | null
     background_video_bytes: number | null
   } | null
 }
@@ -87,8 +88,9 @@ export async function logSessionEvent(
 export async function markSessionSubmitted(
   sessionId: string,
   assets: {
-    face_image_bytes: number | null
-    document_image_bytes: number | null
+    selfie_image_bytes: number | null
+    document_front_image_bytes: number | null
+    document_back_image_bytes: number | null
     background_video_bytes: number | null
   },
 ) {

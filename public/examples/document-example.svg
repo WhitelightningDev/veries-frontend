@@ -1,0 +1,73 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 900 560"
+  role="img"
+  aria-label="Example of a document photo"
+>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#f3f6ff" />
+      <stop offset="1" stop-color="#e9f3ff" />
+    </linearGradient>
+    <linearGradient id="card" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#f4f7ff" />
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="560" rx="40" fill="url(#bg)" />
+
+  <rect
+    x="90"
+    y="90"
+    width="720"
+    height="380"
+    rx="28"
+    fill="url(#card)"
+    stroke="#cdd8f2"
+    stroke-width="6"
+  />
+
+  <rect x="130" y="140" width="170" height="170" rx="20" fill="#e7eefc" />
+  <path
+    d="M185 260c0-40 32-72 72-72s72 32 72 72"
+    fill="none"
+    stroke="#9db3df"
+    stroke-width="18"
+    stroke-linecap="round"
+  />
+  <circle cx="257" cy="205" r="34" fill="#9db3df" />
+
+  <rect x="330" y="145" width="420" height="26" rx="13" fill="#dbe6ff" />
+  <rect x="330" y="190" width="340" height="20" rx="10" fill="#e3ecff" />
+  <rect x="330" y="225" width="390" height="20" rx="10" fill="#e3ecff" />
+  <rect x="330" y="260" width="300" height="20" rx="10" fill="#e3ecff" />
+  <rect x="330" y="300" width="260" height="18" rx="9" fill="#eaf1ff" />
+  <rect x="330" y="332" width="360" height="18" rx="9" fill="#eaf1ff" />
+
+  <g opacity="0.7">
+    <rect x="130" y="360" width="620" height="18" rx="9" fill="#eaf1ff" />
+    <rect x="130" y="392" width="500" height="18" rx="9" fill="#eaf1ff" />
+  </g>
+
+  <g opacity="0.75">
+    <path
+      d="M170 110h560"
+      stroke="#bcd0fb"
+      stroke-width="10"
+      stroke-linecap="round"
+    />
+  </g>
+
+  <text
+    x="450"
+    y="515"
+    text-anchor="middle"
+    font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial"
+    font-size="22"
+    fill="#6b7aa7"
+  >
+    Example: Center the ID, fill the frame, avoid glare
+  </text>
+</svg>
+

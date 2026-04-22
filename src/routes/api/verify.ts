@@ -14,8 +14,9 @@ export const Route = createFileRoute('/api/verify')({
         const form = await request.formData()
 
         const sessionId = form.get('session_id')
-        const faceImage = form.get('face_image')
-        const documentImage = form.get('document_image')
+        const selfieImage = form.get('selfie_image')
+        const documentFrontImage = form.get('document_front_image')
+        const documentBackImage = form.get('document_back_image')
         const backgroundVideo = form.get('background_video')
 
         if (typeof sessionId !== 'string' || sessionId.length < 8) {
@@ -25,16 +26,29 @@ export const Route = createFileRoute('/api/verify')({
           )
         }
 
-        if (!(faceImage instanceof File) || faceImage.size === 0) {
+        if (!(selfieImage instanceof File) || selfieImage.size === 0) {
           return json(
-            { ok: false, error: 'Missing face_image' },
+            { ok: false, error: 'Missing selfie_image' },
             { status: 400 },
           )
         }
 
-        if (!(documentImage instanceof File) || documentImage.size === 0) {
+        if (
+          !(documentFrontImage instanceof File) ||
+          documentFrontImage.size === 0
+        ) {
           return json(
-            { ok: false, error: 'Missing document_image' },
+            { ok: false, error: 'Missing document_front_image' },
+            { status: 400 },
+          )
+        }
+
+        if (
+          !(documentBackImage instanceof File) ||
+          documentBackImage.size === 0
+        ) {
+          return json(
+            { ok: false, error: 'Missing document_back_image' },
             { status: 400 },
           )
         }
@@ -42,21 +56,32 @@ export const Route = createFileRoute('/api/verify')({
         const backgroundFile =
           backgroundVideo instanceof File ? backgroundVideo : null
 
-        const [faceBytes, documentBytes, backgroundBytes] = await Promise.all([
-          faceImage.arrayBuffer(),
-          documentImage.arrayBuffer(),
+        const [
+          selfieBytes,
+          documentFrontBytes,
+          documentBackBytes,
+          backgroundBytes,
+        ] = await Promise.all([
+          selfieImage.arrayBuffer(),
+          documentFrontImage.arrayBuffer(),
+          documentBackImage.arrayBuffer(),
           backgroundFile ? backgroundFile.arrayBuffer() : Promise.resolve(null),
         ])
 
-        const facePath = await writeSessionAsset(
+        const selfiePath = await writeSessionAsset(
           sessionId,
-          'face.jpg',
-          new Uint8Array(faceBytes),
+          'selfie.jpg',
+          new Uint8Array(selfieBytes),
         )
-        const documentPath = await writeSessionAsset(
+        const documentFrontPath = await writeSessionAsset(
           sessionId,
-          'document.jpg',
-          new Uint8Array(documentBytes),
+          'document_front.jpg',
+          new Uint8Array(documentFrontBytes),
+        )
+        const documentBackPath = await writeSessionAsset(
+          sessionId,
+          'document_back.jpg',
+          new Uint8Array(documentBackBytes),
         )
         const backgroundPath = backgroundBytes
           ? await writeSessionAsset(
@@ -67,8 +92,9 @@ export const Route = createFileRoute('/api/verify')({
           : null
 
         const record = await markSessionSubmitted(sessionId, {
-          face_image_bytes: faceImage.size,
-          document_image_bytes: documentImage.size,
+          selfie_image_bytes: selfieImage.size,
+          document_front_image_bytes: documentFrontImage.size,
+          document_back_image_bytes: documentBackImage.size,
           background_video_bytes: backgroundFile ? backgroundFile.size : null,
         })
 
@@ -81,8 +107,9 @@ export const Route = createFileRoute('/api/verify')({
             submitted_at: record.submitted_at,
           },
           stored: {
-            face_image_path: facePath,
-            document_image_path: documentPath,
+            selfie_image_path: selfiePath,
+            document_front_image_path: documentFrontPath,
+            document_back_image_path: documentBackPath,
             background_video_path: backgroundPath,
           },
         })

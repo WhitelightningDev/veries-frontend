@@ -2,7 +2,7 @@ name: Deploy GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, master, dev]
   workflow_dispatch:
 
 permissions:
@@ -29,6 +29,8 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Install
         run: npm ci
@@ -52,4 +54,3 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
-
