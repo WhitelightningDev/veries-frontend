@@ -37,6 +37,25 @@ type AutoCaptureState =
   | { status: 'countdown'; secondsLeft: number }
   | { status: 'capturing' }
 
+type ImageQualityIssue =
+  | 'too_small'
+  | 'too_blurry'
+  | 'too_dark'
+  | 'too_bright'
+  | 'glare_high'
+
+type ImageQualityReport = {
+  ok: boolean
+  issues: ImageQualityIssue[]
+  metrics: {
+    width: number
+    height: number
+    blurVariance: number
+    brightnessMean: number
+    glareRatio: number
+  }
+}
+
 const OVERLAY_GEOMETRY = {
   document: {
     cutout: { x: 12, y: 30, width: 76, height: 48, radius: 5 },
@@ -103,6 +122,169 @@ function quadDelta(a: Quad, b: Quad) {
 
 function dist(a: Point, b: Point) {
   return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+async function decodeDataUrlToImageData(
+  dataUrl: string,
+  maxSide: number,
+): Promise<{ imageData: ImageData; width: number; height: number }> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    throw new Error('Image decoding can only run in the browser.')
+  }
+
+  const img = new Image()
+  img.src = dataUrl
+
+  if (typeof img.decode === 'function') {
+    await img.decode()
+  } else {
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('Failed to decode image.'))
+    })
+  }
+
+  const width = img.naturalWidth || img.width
+  const height = img.naturalHeight || img.height
+
+  const scale =
+    width && height ? Math.min(1, maxSide / Math.max(width, height)) : 1
+  const outW = Math.max(1, Math.round(width * scale))
+  const outH = Math.max(1, Math.round(height * scale))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = outW
+  canvas.height = outH
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) {
+    throw new Error('Unable to create canvas context.')
+  }
+
+  ctx.drawImage(img, 0, 0, outW, outH)
+  const imageData = ctx.getImageData(0, 0, outW, outH)
+  return { imageData, width, height }
+}
+
+function laplacianVariance(gray: Uint8ClampedArray, width: number, height: number) {
+  if (width < 3 || height < 3) return 0
+  let sum = 0
+  let sumSq = 0
+  let count = 0
+  const stride = 2
+  for (let y = 1; y < height - 1; y += stride) {
+    const row = y * width
+    for (let x = 1; x < width - 1; x += stride) {
+      const idx = row + x
+      const c = gray[idx]
+      const lap =
+        -4 * c +
+        gray[idx - 1] +
+        gray[idx + 1] +
+        gray[idx - width] +
+        gray[idx + width]
+      sum += lap
+      sumSq += lap * lap
+      count += 1
+    }
+  }
+  if (!count) return 0
+  const mean = sum / count
+  return sumSq / count - mean * mean
+}
+
+function blurVarianceWithOpenCv(imageData: ImageData, cv: any): number | null {
+  if (
+    !cv ||
+    typeof cv.matFromImageData !== 'function' ||
+    typeof cv.cvtColor !== 'function' ||
+    typeof cv.Laplacian !== 'function' ||
+    typeof cv.meanStdDev !== 'function'
+  ) {
+    return null
+  }
+
+  let src: any
+  let gray: any
+  let lap: any
+  let mean: any
+  let stddev: any
+  try {
+    src = cv.matFromImageData(imageData)
+    gray = new cv.Mat()
+    lap = new cv.Mat()
+    mean = new cv.Mat()
+    stddev = new cv.Mat()
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
+    cv.Laplacian(gray, lap, cv.CV_64F)
+    cv.meanStdDev(lap, mean, stddev)
+    const s = stddev.doubleAt?.(0, 0)
+    return typeof s === 'number' && Number.isFinite(s) ? s * s : null
+  } catch {
+    return null
+  } finally {
+    try {
+      stddev?.delete?.()
+      mean?.delete?.()
+      lap?.delete?.()
+      gray?.delete?.()
+      src?.delete?.()
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function assessImageQuality(
+  dataUrl: string,
+  profile: 'document' | 'selfie',
+  cv: any | null,
+): Promise<ImageQualityReport> {
+  const { imageData, width, height } = await decodeDataUrlToImageData(
+    dataUrl,
+    profile === 'document' ? 520 : 420,
+  )
+
+  const pixels = imageData.data
+  const gray = new Uint8ClampedArray(imageData.width * imageData.height)
+  let glareCount = 0
+  let sum = 0
+  for (let i = 0, p = 0; i < pixels.length; i += 4, p++) {
+    const g = (pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114) | 0
+    gray[p] = g
+    sum += g
+    if (g >= 250) glareCount += 1
+  }
+  const brightnessMean = sum / Math.max(1, gray.length)
+  const glareRatio = glareCount / Math.max(1, gray.length)
+
+  const blurVariance =
+    blurVarianceWithOpenCv(imageData, cv) ??
+    laplacianVariance(gray, imageData.width, imageData.height)
+
+  const issues: ImageQualityIssue[] = []
+  const minSide = Math.min(width, height)
+  const minRequiredSide = profile === 'document' ? 600 : 480
+  const minRequiredBlur = profile === 'document' ? 60 : 50
+  const maxAllowedGlare = profile === 'document' ? 0.12 : 0.15
+
+  if (minSide < minRequiredSide) issues.push('too_small')
+  if (blurVariance < minRequiredBlur) issues.push('too_blurry')
+  if (brightnessMean < 40) issues.push('too_dark')
+  else if (brightnessMean > 220) issues.push('too_bright')
+  if (glareRatio > maxAllowedGlare) issues.push('glare_high')
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    metrics: {
+      width,
+      height,
+      blurVariance,
+      brightnessMean,
+      glareRatio,
+    },
+  }
 }
 
 function orderQuadPoints(points: Point[]): Quad | null {
@@ -270,21 +452,29 @@ export default function CameraVerifier({
   const [step, setStep] = useState<FlowStep>('intro')
   const [policiesAccepted, setPoliciesAccepted] = useState(false)
   const [selfieDataUrl, setSelfieDataUrl] = useState<string | null>(null)
-  const [documentFrontDataUrl, setDocumentFrontDataUrl] = useState<
-    string | null
-  >(null)
-  const [documentBackDataUrl, setDocumentBackDataUrl] = useState<string | null>(
-    null,
-  )
-  const [documentDetectRect, setDocumentDetectRect] = useState<CropRect | null>(
-    null,
-  )
+	  const [documentFrontDataUrl, setDocumentFrontDataUrl] = useState<
+	    string | null
+	  >(null)
+	  const [documentBackDataUrl, setDocumentBackDataUrl] = useState<string | null>(
+	    null,
+	  )
+	  const [documentFrontQuality, setDocumentFrontQuality] =
+	    useState<ImageQualityReport | null>(null)
+	  const [documentBackQuality, setDocumentBackQuality] =
+	    useState<ImageQualityReport | null>(null)
+	  const [selfieQuality, setSelfieQuality] = useState<ImageQualityReport | null>(
+	    null,
+	  )
+	  const [documentDetectRect, setDocumentDetectRect] = useState<CropRect | null>(
+	    null,
+	  )
   const documentDetectRectRef = useRef<CropRect | null>(null)
   const [documentDetectQuad, setDocumentDetectQuad] = useState<Quad | null>(
     null,
   )
   const documentDetectQuadRef = useRef<Quad | null>(null)
   const documentDetectConfidenceRef = useRef<number>(0)
+  const [documentDetectConfidence, setDocumentDetectConfidence] = useState(0)
   const cvRef = useRef<any | null>(null)
   const [cvStatus, setCvStatus] = useState<
     'idle' | 'loading' | 'ready' | 'error'
@@ -425,12 +615,13 @@ export default function CameraVerifier({
       return
     }
 
-    let cancelled = false
-    let stableMs = 0
-    let lastRect: CropRect | null = null
-    let lastPollAt = window.performance.now()
-    let pollTimeoutId = 0
-    let countdownIntervalId = 0
+	    let cancelled = false
+	    let stableMs = 0
+	    let lastRect: CropRect | null = null
+	    let lastQuad: Quad | null = null
+	    let lastPollAt = window.performance.now()
+	    let pollTimeoutId = 0
+	    let countdownIntervalId = 0
 
     const clearCountdown = () => {
       if (countdownIntervalId) {
@@ -447,21 +638,37 @@ export default function CameraVerifier({
       }
     }
 
-    const isStableDetection = () => {
-      const rect = documentDetectRectRef.current
-      const conf = documentDetectConfidenceRef.current
-      if (!rect || conf < 0.62) {
-        lastRect = rect
-        return false
-      }
-      if (!lastRect) {
-        lastRect = rect
-        return true
-      }
-      const delta = rectDelta(rect, lastRect)
-      lastRect = rect
-      return delta < 0.012
-    }
+	    const isStableDetection = () => {
+	      const rect = documentDetectRectRef.current
+	      const quad = documentDetectQuadRef.current
+	      const conf = documentDetectConfidenceRef.current
+	      if (conf < 0.5) {
+	        lastRect = rect
+	        lastQuad = quad
+	        return false
+	      }
+	      if (quad) {
+	        if (!lastQuad) {
+	          lastQuad = quad
+	          return true
+	        }
+	        const delta = quadDelta(quad, lastQuad)
+	        lastQuad = quad
+	        return delta < 0.08
+	      }
+	      if (!rect) {
+	        lastRect = rect
+	        lastQuad = quad
+	        return false
+	      }
+	      if (!lastRect) {
+	        lastRect = rect
+	        return true
+	      }
+	      const delta = rectDelta(rect, lastRect)
+	      lastRect = rect
+	      return delta < 0.02
+	    }
 
     const startCountdown = () => {
       if (autoCaptureStateRef.current.status !== 'idle') return
@@ -523,9 +730,9 @@ export default function CameraVerifier({
           stableMs = Math.max(0, stableMs - dt * 1.5)
         }
 
-        if (stableMs >= 650) {
-          startCountdown()
-        }
+	        if (stableMs >= 450) {
+	          startCountdown()
+	        }
       } else if (autoCaptureStateRef.current.status === 'countdown') {
         if (!isStableDetection()) {
           cancelCountdown()
@@ -574,6 +781,22 @@ export default function CameraVerifier({
     }).catch(() => {})
   }
 
+  function assessAndStoreQuality(
+    target: 'document_front' | 'document_back' | 'selfie',
+    dataUrl: string,
+  ) {
+    const profile = target === 'selfie' ? 'selfie' : 'document'
+    const cv = cvRef.current
+    return assessImageQuality(dataUrl, profile, cv)
+      .then((report) => {
+        if (target === 'document_front') setDocumentFrontQuality(report)
+        else if (target === 'document_back') setDocumentBackQuality(report)
+        else setSelfieQuality(report)
+        return report
+      })
+      .catch(() => null)
+  }
+
   function handleUploadedAsset(
     target: 'document_front' | 'document_back' | 'selfie',
     file: File,
@@ -586,6 +809,7 @@ export default function CameraVerifier({
       if (target === 'selfie') {
         setSelfieDataUrl(result)
         setStep('selfie_preview')
+        void assessAndStoreQuality('selfie', result)
         trackEvent('selfie_uploaded', { bytes: file.size, type: file.type })
         return
       }
@@ -593,6 +817,7 @@ export default function CameraVerifier({
       if (target === 'document_front') {
         setDocumentFrontDataUrl(result)
         setStep('document_front_preview')
+        void assessAndStoreQuality('document_front', result)
         trackEvent('document_front_uploaded', {
           bytes: file.size,
           type: file.type,
@@ -602,6 +827,7 @@ export default function CameraVerifier({
 
       setDocumentBackDataUrl(result)
       setStep('document_back_preview')
+      void assessAndStoreQuality('document_back', result)
       trackEvent('document_back_uploaded', {
         bytes: file.size,
         type: file.type,
@@ -1097,19 +1323,15 @@ export default function CameraVerifier({
   }
 
   function handleCapture() {
-    if (
+    const missingDocDetection =
       (step === 'document_front_live' || step === 'document_back_live') &&
       mode === 'document' &&
       !documentDetectRectRef.current &&
       !documentDetectQuadRef.current
-    ) {
-      setCameraState({
-        status: 'error',
-        message:
-          'We can’t detect your ID yet. Keep it in the frame and hold steady.',
-      })
-      return
-    }
+    const wasAutoCapture =
+      mode === 'document' &&
+      (step === 'document_front_live' || step === 'document_back_live') &&
+      autoCaptureStateRef.current.status === 'capturing'
 
     const dataUrl =
       mode === 'document'
@@ -1126,6 +1348,7 @@ export default function CameraVerifier({
     if (step === 'selfie_live') {
       setSelfieDataUrl(dataUrl)
       setStep('selfie_preview')
+      void assessAndStoreQuality('selfie', dataUrl)
       trackEvent('selfie_captured')
       return
     }
@@ -1133,49 +1356,80 @@ export default function CameraVerifier({
     if (step === 'document_front_live') {
       setDocumentFrontDataUrl(dataUrl)
       setStep('document_front_preview')
+      const qualityPromise = assessAndStoreQuality('document_front', dataUrl)
       trackEvent('document_front_captured')
+      if (missingDocDetection) {
+        trackEvent('document_front_captured_without_detection')
+      }
+      if (wasAutoCapture && typeof window !== 'undefined') {
+        setAutoCaptureState({ status: 'idle' })
+        void qualityPromise.then((report) => {
+          if (report && !report.ok) return
+          if (stepRef.current !== 'document_front_preview') return
+          trackEvent('document_front_auto_advanced')
+          setStep('document_back_live')
+          void startCamera('environment')
+        })
+      }
       return
     }
 
     if (step === 'document_back_live') {
       setDocumentBackDataUrl(dataUrl)
       setStep('document_back_preview')
+      const qualityPromise = assessAndStoreQuality('document_back', dataUrl)
       trackEvent('document_back_captured')
+      if (missingDocDetection) {
+        trackEvent('document_back_captured_without_detection')
+      }
+      if (wasAutoCapture && typeof window !== 'undefined') {
+        setAutoCaptureState({ status: 'idle' })
+        void qualityPromise.then((report) => {
+          if (report && !report.ok) return
+          if (stepRef.current !== 'document_back_preview') return
+          trackEvent('document_back_auto_advanced')
+          setStep('selfie_live')
+          void startCamera('user')
+        })
+      }
     }
   }
 
   function handlePreviewRetake() {
-    if (step === 'selfie_preview') {
-      setSelfieDataUrl(null)
-      trackEvent('selfie_retake')
-      setStep('selfie_live')
-      if (cameraState.status !== 'ready') {
-        void startCamera('user')
-      } else if (facingMode !== 'user') {
+	    if (step === 'selfie_preview') {
+	      setSelfieDataUrl(null)
+	      setSelfieQuality(null)
+	      trackEvent('selfie_retake')
+	      setStep('selfie_live')
+	      if (cameraState.status !== 'ready') {
+	        void startCamera('user')
+	      } else if (facingMode !== 'user') {
         void flipCamera()
       }
       return
     }
 
-    if (step === 'document_front_preview') {
-      setDocumentFrontDataUrl(null)
-      trackEvent('document_front_retake')
-      setStep('document_front_live')
-      if (cameraState.status !== 'ready') {
-        void startCamera('environment')
-      } else if (facingMode !== 'environment') {
+	    if (step === 'document_front_preview') {
+	      setDocumentFrontDataUrl(null)
+	      setDocumentFrontQuality(null)
+	      trackEvent('document_front_retake')
+	      setStep('document_front_live')
+	      if (cameraState.status !== 'ready') {
+	        void startCamera('environment')
+	      } else if (facingMode !== 'environment') {
         void flipCamera()
       }
       return
     }
 
-    if (step === 'document_back_preview') {
-      setDocumentBackDataUrl(null)
-      trackEvent('document_back_retake')
-      setStep('document_back_live')
-      if (cameraState.status !== 'ready') {
-        void startCamera('environment')
-      } else if (facingMode !== 'environment') {
+	    if (step === 'document_back_preview') {
+	      setDocumentBackDataUrl(null)
+	      setDocumentBackQuality(null)
+	      trackEvent('document_back_retake')
+	      setStep('document_back_live')
+	      if (cameraState.status !== 'ready') {
+	        void startCamera('environment')
+	      } else if (facingMode !== 'environment') {
         void flipCamera()
       }
     }
@@ -1290,16 +1544,17 @@ export default function CameraVerifier({
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const isDocLive =
-      step === 'document_front_live' || step === 'document_back_live'
-    if (!isDocLive || cameraState.status !== 'ready' || mode !== 'document') {
-      documentDetectConfidenceRef.current = 0
-      documentDetectRectRef.current = null
-      documentDetectQuadRef.current = null
-      setDocumentDetectRect(null)
-      setDocumentDetectQuad(null)
-      return
-    }
+	    const isDocLive =
+	      step === 'document_front_live' || step === 'document_back_live'
+	    if (!isDocLive || cameraState.status !== 'ready' || mode !== 'document') {
+	      documentDetectConfidenceRef.current = 0
+	      documentDetectRectRef.current = null
+	      documentDetectQuadRef.current = null
+	      setDocumentDetectRect(null)
+	      setDocumentDetectQuad(null)
+	      setDocumentDetectConfidence(0)
+	      return
+	    }
 
     const canvas = documentDetectCanvasRef.current
     const video = videoRef.current
@@ -1313,10 +1568,11 @@ export default function CameraVerifier({
     canvas.width = scanWidth
     canvas.height = scanHeight
 
-    let lastRect: CropRect | null = null
-    let lastQuad: Quad | null = null
-    let lastUpdateAt = 0
-    let stableFrames = 0
+	    let lastRect: CropRect | null = null
+	    let lastQuad: Quad | null = null
+	    let lastUpdateAt = 0
+	    let lastConfidenceUpdateAt = 0
+	    let stableFrames = 0
 
     const scanOnce = () => {
       if (!video.videoWidth || !video.videoHeight) return
@@ -1337,19 +1593,25 @@ export default function CameraVerifier({
         cv &&
         typeof cv.matFromImageData === 'function'
       ) {
+        let src: any | null = null
+        let grayMat: any | null = null
+        let blurMat: any | null = null
+        let edgesMat: any | null = null
+        let contours: any | null = null
+        let hierarchy: any | null = null
         try {
-          const src = cv.matFromImageData(image)
-          const gray = new cv.Mat()
-          const blur = new cv.Mat()
-          const edges = new cv.Mat()
-          const contours = new cv.MatVector()
-          const hierarchy = new cv.Mat()
+          src = cv.matFromImageData(image)
+          grayMat = new cv.Mat()
+          blurMat = new cv.Mat()
+          edgesMat = new cv.Mat()
+          contours = new cv.MatVector()
+          hierarchy = new cv.Mat()
 
-          cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
-          cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0)
-          cv.Canny(blur, edges, 60, 160)
+          cv.cvtColor(src, grayMat, cv.COLOR_RGBA2GRAY)
+          cv.GaussianBlur(grayMat, blurMat, new cv.Size(5, 5), 0)
+          cv.Canny(blurMat, edgesMat, 60, 160)
           cv.findContours(
-            edges,
+            edgesMat,
             contours,
             hierarchy,
             cv.RETR_LIST,
@@ -1363,62 +1625,72 @@ export default function CameraVerifier({
             const contour = contours.get(i)
             const peri = cv.arcLength(contour, true)
             const approx = new cv.Mat()
-            cv.approxPolyDP(contour, approx, 0.02 * peri, true)
+            try {
+              cv.approxPolyDP(contour, approx, 0.02 * peri, true)
 
-            if (approx.rows === 4 && cv.isContourConvex(approx)) {
-              const area = cv.contourArea(approx)
-              const areaNorm = area / (scanWidth * scanHeight)
-              if (areaNorm > 0.12) {
-                const pts: Point[] = []
-                const arr = approx.data32S as Int32Array
-                for (let j = 0; j < arr.length; j += 2) {
-                  pts.push({
-                    x: arr[j] / scanWidth,
-                    y: arr[j + 1] / scanHeight,
-                  })
-                }
-                const ordered = orderQuadPoints(pts)
-                if (ordered) {
-                  const topW = dist(ordered[0], ordered[1])
-                  const botW = dist(ordered[3], ordered[2])
-                  const leftH = dist(ordered[0], ordered[3])
-                  const rightH = dist(ordered[1], ordered[2])
-                  const w = (topW + botW) / 2
-                  const h = (leftH + rightH) / 2
-                  const aspect = w / Math.max(1e-6, h)
-                  const aspectScore = clamp(
-                    Math.min(
-                      aspect / DOCUMENT_TARGET_ASPECT,
-                      DOCUMENT_TARGET_ASPECT / aspect,
-                    ),
-                    0,
-                    1,
-                  )
+              if (approx.rows === 4 && cv.isContourConvex(approx)) {
+                const area = cv.contourArea(approx)
+                const areaNorm = area / (scanWidth * scanHeight)
+                if (areaNorm > 0.12) {
+                  const pts: Point[] = []
+                  const arr = approx.data32S as Int32Array
+                  for (let j = 0; j < arr.length; j += 2) {
+                    pts.push({
+                      x: arr[j] / scanWidth,
+                      y: arr[j + 1] / scanHeight,
+                    })
+                  }
+                  const ordered = orderQuadPoints(pts)
+                  if (ordered) {
+                    const topW = dist(ordered[0], ordered[1])
+                    const botW = dist(ordered[3], ordered[2])
+                    const leftH = dist(ordered[0], ordered[3])
+                    const rightH = dist(ordered[1], ordered[2])
+                    const w = (topW + botW) / 2
+                    const h = (leftH + rightH) / 2
+                    const aspect = w / Math.max(1e-6, h)
+                    const aspectScore = clamp(
+                      Math.min(
+                        aspect / DOCUMENT_TARGET_ASPECT,
+                        DOCUMENT_TARGET_ASPECT / aspect,
+                      ),
+                      0,
+                      1,
+                    )
 
-                  const score = areaNorm * aspectScore
-                  if (score > bestScore) {
-                    bestScore = score
-                    bestQuad = ordered
+                    const score = areaNorm * aspectScore
+                    if (score > bestScore) {
+                      bestScore = score
+                      bestQuad = ordered
+                    }
                   }
                 }
               }
+            } finally {
+              try {
+                approx.delete()
+              } catch {
+                // ignore
+              }
+              try {
+                contour.delete()
+              } catch {
+                // ignore
+              }
             }
-
-            approx.delete()
-            contour.delete()
           }
 
-          hierarchy.delete()
-          contours.delete()
-          edges.delete()
-          blur.delete()
-          gray.delete()
-          src.delete()
+	          const confidence = clamp(bestScore * 6.5, 0, 1)
+	          documentDetectConfidenceRef.current = confidence
+	          {
+	            const now = window.performance.now()
+	            if (now - lastConfidenceUpdateAt > 120) {
+	              lastConfidenceUpdateAt = now
+	              setDocumentDetectConfidence(confidence)
+	            }
+	          }
 
-          const confidence = clamp(bestScore * 6.5, 0, 1)
-          documentDetectConfidenceRef.current = confidence
-
-          if (bestQuad && confidence >= 0.5) {
+	          if (bestQuad && confidence >= 0.45) {
             if (lastQuad) {
               const delta = quadDelta(lastQuad, bestQuad)
               if (delta < 0.06) {
@@ -1436,14 +1708,15 @@ export default function CameraVerifier({
             const rectFromQuad = quadBoundingRect(lastQuad)
             documentDetectRectRef.current = rectFromQuad
 
-            const now = window.performance.now()
-            if (now - lastUpdateAt > 120) {
-              lastUpdateAt = now
-              setDocumentDetectQuad(lastQuad)
-              setDocumentDetectRect(rectFromQuad)
-            }
-            return
-          }
+	            const now = window.performance.now()
+	            if (now - lastUpdateAt > 120) {
+	              lastUpdateAt = now
+	              setDocumentDetectQuad(lastQuad)
+	              setDocumentDetectRect(rectFromQuad)
+	              setDocumentDetectConfidence(confidence)
+	            }
+	            return
+	          }
 
           // If OpenCV is ready but we don't have a stable quad, clear it and fall back.
           if (confidence < 0.25) {
@@ -1453,6 +1726,37 @@ export default function CameraVerifier({
           }
         } catch {
           // Fall back to heuristic detection below.
+        } finally {
+          try {
+            hierarchy?.delete?.()
+          } catch {
+            // ignore
+          }
+          try {
+            contours?.delete?.()
+          } catch {
+            // ignore
+          }
+          try {
+            edgesMat?.delete?.()
+          } catch {
+            // ignore
+          }
+          try {
+            blurMat?.delete?.()
+          } catch {
+            // ignore
+          }
+          try {
+            grayMat?.delete?.()
+          } catch {
+            // ignore
+          }
+          try {
+            src?.delete?.()
+          } catch {
+            // ignore
+          }
         }
       }
 
@@ -1530,16 +1834,24 @@ export default function CameraVerifier({
         Math.floor(scanHeight * 0.96),
       )
 
-      const widthPx = right.index - left.index
-      const heightPx = bottom.index - top.index
-      if (widthPx < scanWidth * 0.35 || heightPx < scanHeight * 0.2) {
-        documentDetectConfidenceRef.current = Math.max(
-          0,
-          documentDetectConfidenceRef.current - 0.08,
-        )
-        stableFrames = 0
-        return
-      }
+	      const widthPx = right.index - left.index
+	      const heightPx = bottom.index - top.index
+	      if (widthPx < scanWidth * 0.35 || heightPx < scanHeight * 0.2) {
+	        const nextConfidence = Math.max(
+	          0,
+	          documentDetectConfidenceRef.current - 0.08,
+	        )
+	        documentDetectConfidenceRef.current = nextConfidence
+	        {
+	          const now = window.performance.now()
+	          if (now - lastConfidenceUpdateAt > 120) {
+	            lastConfidenceUpdateAt = now
+	            setDocumentDetectConfidence(nextConfidence)
+	          }
+	        }
+	        stableFrames = 0
+	        return
+	      }
 
       const raw: CropRect = {
         x: left.index / scanWidth,
@@ -1565,13 +1877,20 @@ export default function CameraVerifier({
           bottom.value / meanRow) /
         4
 
-      const confidence = clamp(((edgeScore - 2.2) / 2.4) * aspectScore, 0, 1)
-      documentDetectConfidenceRef.current = confidence
+	      const confidence = clamp(((edgeScore - 2.2) / 2.4) * aspectScore, 0, 1)
+	      documentDetectConfidenceRef.current = confidence
+	      {
+	        const now = window.performance.now()
+	        if (now - lastConfidenceUpdateAt > 120) {
+	          lastConfidenceUpdateAt = now
+	          setDocumentDetectConfidence(confidence)
+	        }
+	      }
 
-      if (confidence < 0.45) {
-        stableFrames = 0
-        return
-      }
+	      if (confidence < 0.35) {
+	        stableFrames = 0
+	        return
+	      }
 
       // Pad a touch outward and enforce target aspect ratio around center.
       const pad = 0.02
@@ -1612,11 +1931,12 @@ export default function CameraVerifier({
       lastRect = lastRect ? rectLerp(lastRect, rect, alpha) : rect
       documentDetectRectRef.current = lastRect
 
-      const now = window.performance.now()
-      if (now - lastUpdateAt > 120) {
-        lastUpdateAt = now
-        setDocumentDetectRect(lastRect)
-      }
+	      const now = window.performance.now()
+	      if (now - lastUpdateAt > 120) {
+	        lastUpdateAt = now
+	        setDocumentDetectRect(lastRect)
+	        setDocumentDetectConfidence(confidence)
+	      }
     }
 
     const targetIntervalMs = 140
@@ -1707,8 +2027,8 @@ export default function CameraVerifier({
     return () => window.clearInterval(id)
   }, [recordingState])
 
-  const previewOverlayCopy = useMemo(() => {
-    switch (cameraState.status) {
+	  const previewOverlayCopy = useMemo(() => {
+	    switch (cameraState.status) {
       case 'idle':
         return {
           title: 'Camera is off',
@@ -1736,14 +2056,23 @@ export default function CameraVerifier({
         }
       case 'ready':
         return null
-    }
-  }, [cameraState])
+	    }
+	  }, [cameraState])
 
-  const primaryActionLabel =
-    step === 'selfie_live'
-      ? 'Capture'
-      : step === 'document_front_live' || step === 'document_back_live'
-        ? 'Capture now'
+	  const activeQuality =
+	    step === 'document_front_preview'
+	      ? documentFrontQuality
+	      : step === 'document_back_preview'
+	        ? documentBackQuality
+	        : step === 'selfie_preview'
+	          ? selfieQuality
+	          : null
+
+	  const primaryActionLabel =
+	    step === 'selfie_live'
+	      ? 'Capture'
+	      : step === 'document_front_live' || step === 'document_back_live'
+	        ? 'Capture now'
         : null
 
   const activeStep =
@@ -2315,14 +2644,17 @@ export default function CameraVerifier({
                 recordingChunksRef.current = []
                 recorderRef.current = null
                 setRecordingState({ status: 'idle' })
-                setSubmitState({ status: 'idle' })
-                setPoliciesAccepted(false)
-                setSelfieDataUrl(null)
-                setDocumentFrontDataUrl(null)
-                setDocumentBackDataUrl(null)
-                setStep('intro')
-                trackEvent('session_restart')
-              }}
+	                setSubmitState({ status: 'idle' })
+	                setPoliciesAccepted(false)
+	                setSelfieDataUrl(null)
+	                setSelfieQuality(null)
+	                setDocumentFrontDataUrl(null)
+	                setDocumentFrontQuality(null)
+	                setDocumentBackDataUrl(null)
+	                setDocumentBackQuality(null)
+	                setStep('intro')
+	                trackEvent('session_restart')
+	              }}
               className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-4 py-2 text-sm font-semibold text-[var(--sea-ink)]"
             >
               Start new
@@ -2384,12 +2716,20 @@ export default function CameraVerifier({
                         step === 'document_back_preview'
                       ? 'ID BACK'
                       : 'ID FRONT'}
-                  {cameraState.status === 'ready' ? (
-                    <span className="ml-2 text-white/70">
-                      {facingMode === 'user' ? 'Front' : 'Back'}
-                    </span>
-                  ) : null}
-                </div>
+	                  {cameraState.status === 'ready' ? (
+	                    <span className="ml-2 text-white/70">
+	                      {facingMode === 'user' ? 'Front' : 'Back'}
+	                    </span>
+	                  ) : null}
+	                  {cameraState.status === 'ready' &&
+	                  mode === 'document' &&
+	                  (step === 'document_front_live' ||
+	                    step === 'document_back_live') ? (
+	                    <span className="ml-2 text-white/70">
+	                      {Math.round(documentDetectConfidence * 100)}%
+	                    </span>
+	                  ) : null}
+	                </div>
 
                 <div className="absolute left-4 right-4 bottom-4 rounded-2xl border border-[rgba(255,255,255,0.18)] bg-[rgba(15,27,31,0.55)] px-3 py-2 text-left text-[11px] text-white/80 backdrop-blur-sm sm:px-4 sm:py-3 sm:text-xs">
                   <p className="m-0 font-semibold text-white">
@@ -2458,15 +2798,49 @@ export default function CameraVerifier({
                     ? 'Back of ID capture'
                     : 'Front of ID capture'}
               </h2>
-              <ul className="mt-4 mb-0 list-disc space-y-2 pl-5 text-sm leading-6 text-[var(--sea-ink-soft)]">
-                {tips.map((tip) => (
-                  <li key={tip}>{tip}</li>
-                ))}
-              </ul>
+	              <ul className="mt-4 mb-0 list-disc space-y-2 pl-5 text-sm leading-6 text-[var(--sea-ink-soft)]">
+	                {tips.map((tip) => (
+	                  <li key={tip}>{tip}</li>
+	                ))}
+	              </ul>
+	
+	              {activeQuality ? (
+	                <div
+	                  className={[
+	                    'mt-5 rounded-2xl border p-4 text-sm leading-6',
+	                    activeQuality.ok
+	                      ? 'border-[rgba(60,160,95,0.25)] bg-[rgba(255,255,255,0.55)] text-[rgba(30,90,55,0.95)]'
+	                      : 'border-[rgba(200,140,60,0.25)] bg-[rgba(255,255,255,0.55)] text-[rgba(120,70,20,0.95)]',
+	                  ].join(' ')}
+	                >
+	                  <p className="m-0 font-semibold">
+	                    {activeQuality.ok ? 'Quality looks good' : 'Quality warning'}
+	                  </p>
+	                  {activeQuality.ok ? (
+	                    <p className="mt-1 mb-0">
+	                      If anything is hard to read, retake before continuing.
+	                    </p>
+	                  ) : (
+	                    <p className="mt-1 mb-0">
+	                      {activeQuality.issues.includes('too_blurry')
+	                        ? 'Image looks blurry — hold steady and try again.'
+	                        : activeQuality.issues.includes('glare_high')
+	                          ? 'There’s a lot of glare — tilt the card slightly.'
+	                          : activeQuality.issues.includes('too_dark')
+	                            ? 'Image is too dark — move into better light.'
+	                            : activeQuality.issues.includes('too_bright')
+	                              ? 'Image is too bright — reduce direct light.'
+	                              : activeQuality.issues.includes('too_small')
+	                                ? 'Move closer so the ID fills more of the frame.'
+	                                : 'Retake for a clearer image.'}
+	                    </p>
+	                  )}
+	                </div>
+	              ) : null}
 
-              {step === 'selfie_preview' ||
-              step === 'document_front_preview' ||
-              step === 'document_back_preview' ? (
+	              {step === 'selfie_preview' ||
+	              step === 'document_front_preview' ||
+	              step === 'document_back_preview' ? (
                 <div className="mt-5 flex flex-wrap gap-2">
                   <button
                     type="button"

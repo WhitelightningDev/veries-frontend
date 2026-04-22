@@ -61,11 +61,11 @@ export default function VerifyFlow() {
             return fromEnv || 'demo'
           }
 
-          if (normalizedBackendBase) {
-            const customerId = getCustomerId()
+	          if (normalizedBackendBase) {
+	            const customerId = getCustomerId()
 
-            const sessionRes = await fetch(
-              `${normalizedBackendBase}/verification-sessions`,
+	            const sessionRes = await fetch(
+	              `${normalizedBackendBase}/verification-sessions`,
               {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
@@ -76,10 +76,31 @@ export default function VerifyFlow() {
               },
             )
 
-            if (!sessionRes.ok) {
-              const text = await sessionRes.text().catch(() => '')
-              throw new Error(text || 'Unable to start upload session.')
-            }
+	            if (!sessionRes.ok) {
+	              const raw = await sessionRes.text().catch(() => '')
+	              const payload = (() => {
+	                try {
+	                  return JSON.parse(raw) as {
+	                    detail?: unknown
+	                    error?: string
+	                    message?: string
+	                  }
+	                } catch {
+	                  return null
+	                }
+	              })()
+
+	              const detail =
+	                payload && typeof payload.detail === 'string'
+	                  ? payload.detail
+	                  : payload && typeof payload.message === 'string'
+	                    ? payload.message
+	                    : payload && typeof payload.error === 'string'
+	                      ? payload.error
+	                      : null
+
+	              throw new Error(detail || raw || 'Unable to start upload session.')
+	            }
 
             const sessionPayload = (await sessionRes
               .json()
@@ -91,27 +112,64 @@ export default function VerifyFlow() {
               throw new Error('Backend did not return a session id.')
             }
 
-            const uploadOne = async (assetType: string, file: File) => {
-              const form = new FormData()
-              form.set('customer_id', customerId)
-              form.set('asset_type', assetType)
-              form.set('file', file)
-              const res = await fetch(
+	            const uploadOne = async (assetType: string, file: File) => {
+	              const form = new FormData()
+	              form.set('customer_id', customerId)
+	              form.set('asset_type', assetType)
+	              form.set('file', file)
+	              const res = await fetch(
                 `${normalizedBackendBase}/verification-sessions/${backendSessionId}/upload`,
                 {
                   method: 'POST',
                   body: form,
                 },
-              )
-              if (!res.ok) {
-                const text = await res.text().catch(() => '')
-                throw new Error(text || `Upload failed (${assetType}).`)
-              }
-            }
+	              )
+	              if (!res.ok) {
+	                const raw = await res.text().catch(() => '')
+	                const payload = (() => {
+	                  try {
+	                    return JSON.parse(raw) as {
+	                      detail?: unknown
+	                      error?: string
+	                      message?: string
+	                    }
+	                  } catch {
+	                    return null
+	                  }
+	                })()
 
-            await uploadOne('id_document_front', documentFrontFile)
-            await uploadOne('id_document_back', documentBackFile)
-            await uploadOne('selfie_with_id', selfieFile)
+	                const detail =
+	                  payload && typeof payload.detail === 'string'
+	                    ? payload.detail
+	                    : payload &&
+	                        payload.detail &&
+	                        typeof payload.detail === 'object' &&
+	                        typeof (payload.detail as any).message === 'string'
+	                      ? ((payload.detail as any).message as string)
+	                      : payload && typeof payload.message === 'string'
+	                        ? payload.message
+	                        : payload && typeof payload.error === 'string'
+	                          ? payload.error
+	                          : null
+
+	                const issues =
+	                  payload &&
+	                  payload.detail &&
+	                  typeof payload.detail === 'object' &&
+	                  Array.isArray((payload.detail as any).vision?.issues)
+	                    ? ((payload.detail as any).vision.issues as string[])
+	                    : null
+
+	                const suffix = issues?.length ? ` (${issues.join(', ')})` : ''
+	                const message = detail ? `${detail}${suffix}` : raw
+
+	                throw new Error(message || `Upload failed (${assetType}).`)
+	              }
+	            }
+
+	            await uploadOne('id_document_front', documentFrontFile)
+	            await uploadOne('id_document_back', documentBackFile)
+	            await uploadOne('selfie_with_id', selfieFile)
             if (backgroundFile) {
               await uploadOne('background_video', backgroundFile)
             }
