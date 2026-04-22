@@ -17,6 +17,18 @@ npm run dev
 
 Open `http://localhost:3000/` for the verification flow.
 
+## Optional: Upload to `veries-backend`
+
+By default the frontend posts captures to its local `/api/verify` handler (dev-only).
+To upload into the FastAPI backend instead, set:
+
+```bash
+VITE_VERIES_BACKEND_API_BASE=http://localhost:8000/api
+VITE_VERIES_CUSTOMER_ID=demo
+```
+
+You can also pass `customer_id` as a query param (e.g. `/?customer_id=abc123`).
+
 # Building For Production
 
 To build this application for production:
