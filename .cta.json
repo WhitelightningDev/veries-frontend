@@ -12,10 +12,5 @@
   "routerOnly": false,
   "version": 1,
   "framework": "react",
-  "chosenAddOns": [
-    "eslint",
-    "shadcn",
-    "ai",
-    "store"
-  ]
+  "chosenAddOns": ["eslint", "shadcn", "ai", "store"]
 }
