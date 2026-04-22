@@ -29,6 +29,16 @@ npm run build
 
 This project does not include a test suite.
 
+## GitHub Pages (Phone Testing)
+
+This repo includes a GitHub Actions workflow that builds a static preview and deploys it to GitHub Pages.
+
+- Push to `main`
+- In GitHub: `Settings → Pages → Build and deployment → Source: GitHub Actions`
+- Your preview URL will be `https://<owner>.github.io/<repo>/`
+
+Note: GitHub Pages is static hosting, so any server-side `/api/*` routes won’t run there.
+
 ## Styling
 
 This project uses [Tailwind CSS](https://tailwindcss.com/) for styling.

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { loadOpenCv } from '../lib/openCv'
 
 type CaptureMode = 'face' | 'document'
 type FacingMode = 'user' | 'environment'
@@ -58,6 +59,54 @@ function rectLerp(a: CropRect, b: CropRect, t: number): CropRect {
     width: lerp(a.width, b.width, t),
     height: lerp(a.height, b.height, t),
   }
+}
+
+type Point = { x: number; y: number }
+type Quad = [Point, Point, Point, Point]
+
+function pointLerp(a: Point, b: Point, t: number): Point {
+  return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) }
+}
+
+function quadLerp(a: Quad, b: Quad, t: number): Quad {
+  return [
+    pointLerp(a[0], b[0], t),
+    pointLerp(a[1], b[1], t),
+    pointLerp(a[2], b[2], t),
+    pointLerp(a[3], b[3], t),
+  ]
+}
+
+function dist(a: Point, b: Point) {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function orderQuadPoints(points: Point[]): Quad | null {
+  if (points.length !== 4) return null
+  const sums = points.map((p) => p.x + p.y)
+  const diffs = points.map((p) => p.x - p.y)
+
+  const tl = points[sums.indexOf(Math.min(...sums))]
+  const br = points[sums.indexOf(Math.max(...sums))]
+  const tr = points[diffs.indexOf(Math.min(...diffs))]
+  const bl = points[diffs.indexOf(Math.max(...diffs))]
+
+  return [tl, tr, br, bl]
+}
+
+function quadBoundingRect(quad: Quad): CropRect {
+  const xs = quad.map((p) => p.x)
+  const ys = quad.map((p) => p.y)
+  const minX = Math.min(...xs)
+  const maxX = Math.max(...xs)
+  const minY = Math.min(...ys)
+  const maxY = Math.max(...ys)
+  return normalizeRect({
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  })
 }
 
 function normalizeRect(rect: CropRect): CropRect {
@@ -124,6 +173,8 @@ export default function CameraVerifier({
   const faceFileInputRef = useRef<HTMLInputElement | null>(null)
   const documentFileInputRef = useRef<HTMLInputElement | null>(null)
   const documentDetectCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const documentCaptureCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const documentWarpCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const sessionIdRef = useRef<string>(createSessionId())
 
@@ -134,7 +185,15 @@ export default function CameraVerifier({
     null,
   )
   const documentDetectRectRef = useRef<CropRect | null>(null)
+  const [documentDetectQuad, setDocumentDetectQuad] = useState<Quad | null>(
+    null,
+  )
+  const documentDetectQuadRef = useRef<Quad | null>(null)
   const documentDetectConfidenceRef = useRef<number>(0)
+  const cvRef = useRef<any | null>(null)
+  const [cvStatus, setCvStatus] = useState<
+    'idle' | 'loading' | 'ready' | 'error'
+  >('idle')
 
   const mode: CaptureMode =
     step === 'face_live' || step === 'face_preview' ? 'face' : 'document'
@@ -255,6 +314,41 @@ export default function CameraVerifier({
     if (!input) return
     input.value = ''
     input.click()
+  }
+
+  async function handleConfirmSubmission() {
+    if (!faceDataUrl || !documentDataUrl) return
+    if (submitState.status === 'submitting') return
+
+    setSubmitState({ status: 'submitting' })
+    trackEvent('submission_attempted')
+
+    try {
+      const backgroundVideo = await stopBackgroundRecording()
+      await onConfirm?.({
+        sessionId: sessionIdRef.current,
+        faceDataUrl,
+        documentDataUrl,
+        backgroundVideo,
+      })
+      setSubmitState({ status: 'submitted' })
+      trackEvent('submission_success')
+      setStep('success')
+      void stopCamera()
+    } catch (error) {
+      trackEvent('submission_failed', {
+        message:
+          error instanceof Error ? error.message : 'Submission failed.',
+      })
+      setSubmitState({
+        status: 'error',
+        message:
+          error instanceof Error ? error.message : 'Submission failed.',
+      })
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+    }
   }
 
   function detachStream() {
@@ -404,18 +498,39 @@ export default function CameraVerifier({
 
     setRecordingState({ status: 'stopping' })
     stopRecordingPromiseRef.current = new Promise<Blob | null>((resolve) => {
-      const onStop = () => {
+      let settled = false
+      let timeoutId: number | null = null
+
+      const finalize = () => {
+        if (settled) return
+        settled = true
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId)
+        }
         recorder.removeEventListener('stop', onStop)
         stopRecordingPromiseRef.current = null
-        resolve(recordedBlobRef.current)
+
+        const blob = recordedBlobRef.current
+        if (blob) {
+          setRecordingState({ status: 'stopped', blob })
+        } else {
+          setRecordingState({ status: 'idle' })
+        }
+        resolve(blob)
       }
+
+      const onStop = () => finalize()
+
       recorder.addEventListener('stop', onStop)
+
+      timeoutId = window.setTimeout(() => {
+        finalize()
+      }, 2500)
+
       try {
         recorder.stop()
       } catch {
-        recorder.removeEventListener('stop', onStop)
-        stopRecordingPromiseRef.current = null
-        resolve(recordedBlobRef.current)
+        finalize()
       }
     })
 
@@ -560,8 +675,126 @@ export default function CameraVerifier({
     return canvas.toDataURL('image/jpeg', 0.92)
   }
 
+  function captureDocumentWithWarp(): string | null {
+    const cv = cvRef.current
+    const quad = documentDetectQuadRef.current
+    const video = videoRef.current
+    if (!cv || !quad || !video) return null
+    if (
+      typeof cv.imread !== 'function' ||
+      typeof cv.getPerspectiveTransform !== 'function' ||
+      typeof cv.warpPerspective !== 'function'
+    ) {
+      return null
+    }
+
+    const width = video.videoWidth
+    const height = video.videoHeight
+    if (!width || !height) return null
+
+    const frameCanvas =
+      documentCaptureCanvasRef.current ?? document.createElement('canvas')
+    documentCaptureCanvasRef.current = frameCanvas
+    frameCanvas.width = width
+    frameCanvas.height = height
+    const frameCtx = frameCanvas.getContext('2d')
+    if (!frameCtx) return null
+
+    frameCtx.save()
+    if (facingMode === 'user') {
+      frameCtx.translate(width, 0)
+      frameCtx.scale(-1, 1)
+    }
+    frameCtx.drawImage(video, 0, 0, width, height)
+    frameCtx.restore()
+
+    const pix = (p: Point) => ({ x: p.x * width, y: p.y * height })
+    const tl = pix(quad[0])
+    const tr = pix(quad[1])
+    const br = pix(quad[2])
+    const bl = pix(quad[3])
+
+    const topW = Math.hypot(tr.x - tl.x, tr.y - tl.y)
+    const botW = Math.hypot(br.x - bl.x, br.y - bl.y)
+    const leftH = Math.hypot(bl.x - tl.x, bl.y - tl.y)
+    const rightH = Math.hypot(br.x - tr.x, br.y - tr.y)
+    const maxWidth = Math.max(topW, botW)
+    const maxHeight = Math.max(leftH, rightH)
+
+    let dstW = Math.round(maxWidth)
+    dstW = clamp(dstW, 720, 1400)
+    let dstH = Math.round(dstW / DOCUMENT_TARGET_ASPECT)
+    if (dstH > maxHeight * 1.35) {
+      dstH = Math.round(maxHeight)
+      dstW = Math.round(dstH * DOCUMENT_TARGET_ASPECT)
+    }
+    dstH = clamp(dstH, 420, 1000)
+
+    const outCanvas =
+      documentWarpCanvasRef.current ?? document.createElement('canvas')
+    documentWarpCanvasRef.current = outCanvas
+
+    let srcMat: any
+    let dstMat: any
+    let srcPts: any
+    let dstPts: any
+    let m: any
+    try {
+      srcMat = cv.imread(frameCanvas)
+      dstMat = new cv.Mat()
+      srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        tl.x,
+        tl.y,
+        tr.x,
+        tr.y,
+        br.x,
+        br.y,
+        bl.x,
+        bl.y,
+      ])
+      dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        0,
+        0,
+        dstW,
+        0,
+        dstW,
+        dstH,
+        0,
+        dstH,
+      ])
+      m = cv.getPerspectiveTransform(srcPts, dstPts)
+
+      cv.warpPerspective(
+        srcMat,
+        dstMat,
+        m,
+        new cv.Size(dstW, dstH),
+        cv.INTER_LINEAR,
+        cv.BORDER_CONSTANT,
+        new cv.Scalar(0, 0, 0, 0),
+      )
+      cv.imshow(outCanvas, dstMat)
+      return outCanvas.toDataURL('image/jpeg', 0.92)
+    } catch {
+      return null
+    } finally {
+      try {
+        m?.delete?.()
+        srcPts?.delete?.()
+        dstPts?.delete?.()
+        dstMat?.delete?.()
+        srcMat?.delete?.()
+      } catch {
+        // Ignore cleanup errors.
+      }
+    }
+  }
+
   function handleCapture() {
-    const dataUrl = captureFrame()
+    const dataUrl =
+      mode === 'document'
+        ? (captureDocumentWithWarp() ?? captureFrame())
+        : captureFrame()
     if (!dataUrl) {
       setCameraState({
         status: 'error',
@@ -636,9 +869,39 @@ export default function CameraVerifier({
       cameraState.status !== 'ready' ||
       mode !== 'document'
     ) {
+      return
+    }
+
+    if (cvRef.current || cvStatus === 'loading' || cvStatus === 'ready') {
+      return
+    }
+
+    setCvStatus('loading')
+    void loadOpenCv()
+      .then((cv) => {
+        cvRef.current = cv
+        setCvStatus('ready')
+      })
+      .catch((error: unknown) => {
+        setCvStatus('error')
+        trackEvent('opencv_load_failed', {
+          message: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }, [cameraState.status, cvStatus, mode, step])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (
+      step !== 'document_live' ||
+      cameraState.status !== 'ready' ||
+      mode !== 'document'
+    ) {
       documentDetectConfidenceRef.current = 0
       documentDetectRectRef.current = null
+      documentDetectQuadRef.current = null
       setDocumentDetectRect(null)
+      setDocumentDetectQuad(null)
       return
     }
 
@@ -655,15 +918,150 @@ export default function CameraVerifier({
     canvas.height = scanHeight
 
     let lastRect: CropRect | null = null
+    let lastQuad: Quad | null = null
     let lastUpdateAt = 0
     let stableFrames = 0
 
     const scanOnce = () => {
       if (!video.videoWidth || !video.videoHeight) return
 
+      ctx.save()
+      if (facingMode === 'user') {
+        ctx.translate(scanWidth, 0)
+        ctx.scale(-1, 1)
+      }
       ctx.drawImage(video, 0, 0, scanWidth, scanHeight)
+      ctx.restore()
       const image = ctx.getImageData(0, 0, scanWidth, scanHeight)
       const data = image.data
+
+      const cv = cvRef.current
+      if (
+        cvStatus === 'ready' &&
+        cv &&
+        typeof cv.matFromImageData === 'function'
+      ) {
+        try {
+          const src = cv.matFromImageData(image)
+          const gray = new cv.Mat()
+          const blur = new cv.Mat()
+          const edges = new cv.Mat()
+          const contours = new cv.MatVector()
+          const hierarchy = new cv.Mat()
+
+          cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
+          cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0)
+          cv.Canny(blur, edges, 60, 160)
+          cv.findContours(
+            edges,
+            contours,
+            hierarchy,
+            cv.RETR_LIST,
+            cv.CHAIN_APPROX_SIMPLE,
+          )
+
+          let bestQuad: Quad | null = null
+          let bestScore = 0
+
+          for (let i = 0; i < contours.size(); i++) {
+            const contour = contours.get(i)
+            const peri = cv.arcLength(contour, true)
+            const approx = new cv.Mat()
+            cv.approxPolyDP(contour, approx, 0.02 * peri, true)
+
+            if (approx.rows === 4 && cv.isContourConvex(approx)) {
+              const area = cv.contourArea(approx)
+              const areaNorm = area / (scanWidth * scanHeight)
+              if (areaNorm > 0.12) {
+                const pts: Point[] = []
+                const arr = approx.data32S as Int32Array
+                for (let j = 0; j < arr.length; j += 2) {
+                  pts.push({
+                    x: arr[j] / scanWidth,
+                    y: arr[j + 1] / scanHeight,
+                  })
+                }
+                const ordered = orderQuadPoints(pts)
+                if (ordered) {
+                  const topW = dist(ordered[0], ordered[1])
+                  const botW = dist(ordered[3], ordered[2])
+                  const leftH = dist(ordered[0], ordered[3])
+                  const rightH = dist(ordered[1], ordered[2])
+                  const w = (topW + botW) / 2
+                  const h = (leftH + rightH) / 2
+                  const aspect = w / Math.max(1e-6, h)
+                  const aspectScore = clamp(
+                    Math.min(
+                      aspect / DOCUMENT_TARGET_ASPECT,
+                      DOCUMENT_TARGET_ASPECT / aspect,
+                    ),
+                    0,
+                    1,
+                  )
+
+                  const score = areaNorm * aspectScore
+                  if (score > bestScore) {
+                    bestScore = score
+                    bestQuad = ordered
+                  }
+                }
+              }
+            }
+
+            approx.delete()
+            contour.delete()
+          }
+
+          hierarchy.delete()
+          contours.delete()
+          edges.delete()
+          blur.delete()
+          gray.delete()
+          src.delete()
+
+          const confidence = clamp(bestScore * 6.5, 0, 1)
+          documentDetectConfidenceRef.current = confidence
+
+          if (bestQuad && confidence >= 0.5) {
+            if (lastQuad) {
+              const delta = lastQuad.reduce((sum, p, idx) => {
+                const next = bestQuad[idx]
+                return sum + Math.abs(p.x - next.x) + Math.abs(p.y - next.y)
+              }, 0)
+              if (delta < 0.06) {
+                stableFrames = Math.min(6, stableFrames + 1)
+              } else {
+                stableFrames = Math.max(0, stableFrames - 1)
+              }
+            } else {
+              stableFrames = 1
+            }
+
+            const alpha = stableFrames >= 3 ? 0.35 : 0.22
+            lastQuad = lastQuad ? quadLerp(lastQuad, bestQuad, alpha) : bestQuad
+            documentDetectQuadRef.current = lastQuad
+            const rectFromQuad = quadBoundingRect(lastQuad)
+            documentDetectRectRef.current = rectFromQuad
+
+            const now = Date.now()
+            if (now - lastUpdateAt > 220) {
+              lastUpdateAt = now
+              setDocumentDetectQuad(lastQuad)
+              setDocumentDetectRect(rectFromQuad)
+            }
+            return
+          }
+
+          // If OpenCV is ready but we don't have a stable quad, clear it and fall back.
+          if (confidence < 0.25) {
+            lastQuad = null
+            documentDetectQuadRef.current = null
+            setDocumentDetectQuad(null)
+          }
+        } catch {
+          // Fall back to heuristic detection below.
+        }
+      }
 
       const gray = new Uint8ClampedArray(scanWidth * scanHeight)
       for (let i = 0, p = 0; i < data.length; i += 4, p++) {
@@ -830,7 +1228,7 @@ export default function CameraVerifier({
 
     const id = window.setInterval(scanOnce, 220)
     return () => window.clearInterval(id)
-  }, [cameraState.status, mode, step])
+  }, [cameraState.status, cvStatus, facingMode, mode, step])
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return
@@ -1204,38 +1602,7 @@ export default function CameraVerifier({
               </button>
               <button
                 type="button"
-                onClick={async () => {
-                  if (!faceDataUrl || !documentDataUrl) return
-                  setSubmitState({ status: 'submitting' })
-                  trackEvent('submission_attempted')
-                  try {
-                    const backgroundVideo = await stopBackgroundRecording()
-                    await onConfirm?.({
-                      sessionId: sessionIdRef.current,
-                      faceDataUrl,
-                      documentDataUrl,
-                      backgroundVideo,
-                    })
-                    setSubmitState({ status: 'submitted' })
-                    trackEvent('submission_success')
-                    await stopCamera()
-                    setStep('success')
-                  } catch (error) {
-                    trackEvent('submission_failed', {
-                      message:
-                        error instanceof Error
-                          ? error.message
-                          : 'Submission failed.',
-                    })
-                    setSubmitState({
-                      status: 'error',
-                      message:
-                        error instanceof Error
-                          ? error.message
-                          : 'Submission failed.',
-                    })
-                  }
-                }}
+                onClick={() => void handleConfirmSubmission()}
                 disabled={!reviewReady || submitState.status === 'submitting'}
                 className="rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-4 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] transition hover:-translate-y-0.5 disabled:opacity-60"
               >
@@ -1288,12 +1655,40 @@ export default function CameraVerifier({
       </header>
 
       {step === 'review' ? (
-        <ReviewScreen
-          faceDataUrl={faceDataUrl}
-          documentDataUrl={documentDataUrl}
-          onEditFace={() => setStep('face_preview')}
-          onEditDocument={() => setStep('document_preview')}
-        />
+        <>
+          <ReviewScreen
+            faceDataUrl={faceDataUrl}
+            documentDataUrl={documentDataUrl}
+            onEditFace={() => setStep('face_preview')}
+            onEditDocument={() => setStep('document_preview')}
+          />
+
+          <div className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--line)] bg-white/70 backdrop-blur-sm sm:hidden">
+            <div className="page-wrap flex items-center justify-between gap-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+              <div className="min-w-0">
+                <p className="m-0 text-[11px] font-semibold text-[var(--sea-ink)]">
+                  Ready to submit
+                </p>
+                <p className="mt-1 mb-0 truncate text-[11px] text-[var(--sea-ink-soft)]">
+                  {submitState.status === 'error'
+                    ? submitState.message
+                    : submitState.status === 'submitting'
+                      ? 'Uploading your images…'
+                      : 'Confirm both images to finish.'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleConfirmSubmission()}
+                disabled={!reviewReady || submitState.status === 'submitting'}
+                className="shrink-0 rounded-full border border-[var(--accent-line)] bg-[var(--accent-soft)] px-5 py-2 text-sm font-semibold text-[var(--lagoon-deep)] shadow-[0_12px_22px_var(--shadow-strong)] disabled:opacity-60"
+              >
+                {submitState.status === 'submitting' ? 'Uploading…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </>
       ) : step === 'success' ? (
         <div className="mt-6 rounded-2xl border border-[var(--line)] bg-white/50 p-6 text-[var(--sea-ink-soft)]">
           <p className="island-kicker mb-2">Success</p>
@@ -1338,7 +1733,11 @@ export default function CameraVerifier({
                 )}
 
                 {step === 'face_live' || step === 'document_live' ? (
-                  <Overlay mode={mode} documentRect={documentDetectRect} />
+                  <Overlay
+                    mode={mode}
+                    documentRect={documentDetectRect}
+                    documentQuad={documentDetectQuad}
+                  />
                 ) : null}
 
                 <div className="absolute left-4 top-4 rounded-full border border-[rgba(255,255,255,0.25)] bg-[rgba(15,27,31,0.55)] px-3 py-1.5 text-xs font-semibold tracking-wide text-white">
@@ -1514,10 +1913,34 @@ export default function CameraVerifier({
 function Overlay({
   mode,
   documentRect,
+  documentQuad,
 }: {
   mode: CaptureMode
   documentRect?: CropRect | null
+  documentQuad?: Quad | null
 }) {
+  const quad: Quad | null =
+    documentQuad ??
+    (documentRect
+      ? ([
+          { x: documentRect.x, y: documentRect.y },
+          { x: documentRect.x + documentRect.width, y: documentRect.y },
+          {
+            x: documentRect.x + documentRect.width,
+            y: documentRect.y + documentRect.height,
+          },
+          { x: documentRect.x, y: documentRect.y + documentRect.height },
+        ] as const)
+      : null)
+
+  const quadView = quad
+    ? (quad.map((p) => ({ x: p.x * 100, y: p.y * 100 })) as unknown as Quad)
+    : null
+
+  const quadPath = quadView
+    ? `M${quadView[0].x},${quadView[0].y} L${quadView[1].x},${quadView[1].y} L${quadView[2].x},${quadView[2].y} L${quadView[3].x},${quadView[3].y} Z`
+    : null
+
   const documentCutout = documentRect
     ? {
         x: documentRect.x * 100,
@@ -1529,9 +1952,32 @@ function Overlay({
     : OVERLAY_GEOMETRY.document.cutout
   const faceOverlay = OVERLAY_GEOMETRY.face
 
-  const documentPath = `M${documentCutout.x},${documentCutout.y} h${documentCutout.width} v${documentCutout.height} h-${documentCutout.width} Z`
+  const documentPath = quadPath
+    ? quadPath
+    : `M${documentCutout.x},${documentCutout.y} h${documentCutout.width} v${documentCutout.height} h-${documentCutout.width} Z`
   const corner = 6
   const cornerStroke = 2.2
+  const quadCornerLength = 8
+
+  const quadCornerStrokes = quadView
+    ? quadView.map((cornerPoint, index) => {
+        const prev = quadView[(index + 3) % 4]
+        const next = quadView[(index + 1) % 4]
+        const v1 = { x: prev.x - cornerPoint.x, y: prev.y - cornerPoint.y }
+        const v2 = { x: next.x - cornerPoint.x, y: next.y - cornerPoint.y }
+        const len1 = Math.max(0.0001, Math.hypot(v1.x, v1.y))
+        const len2 = Math.max(0.0001, Math.hypot(v2.x, v2.y))
+        const p1 = {
+          x: cornerPoint.x + (v1.x / len1) * quadCornerLength,
+          y: cornerPoint.y + (v1.y / len1) * quadCornerLength,
+        }
+        const p2 = {
+          x: cornerPoint.x + (v2.x / len2) * quadCornerLength,
+          y: cornerPoint.y + (v2.y / len2) * quadCornerLength,
+        }
+        return `M${cornerPoint.x},${cornerPoint.y} L${p1.x},${p1.y} M${cornerPoint.x},${cornerPoint.y} L${p2.x},${p2.y}`
+      })
+    : null
 
   return (
     <svg
@@ -1552,14 +1998,20 @@ function Overlay({
               fill="black"
             />
           ) : (
-            <rect
-              x={documentCutout.x}
-              y={documentCutout.y}
-              width={documentCutout.width}
-              height={documentCutout.height}
-              rx={documentCutout.radius}
-              fill="black"
-            />
+            <>
+              {quadPath ? (
+                <path d={quadPath} fill="black" />
+              ) : (
+                <rect
+                  x={documentCutout.x}
+                  y={documentCutout.y}
+                  width={documentCutout.width}
+                  height={documentCutout.height}
+                  rx={documentCutout.radius}
+                  fill="black"
+                />
+              )}
+            </>
           )}
         </mask>
       </defs>
@@ -1610,54 +2062,79 @@ function Overlay({
         </>
       ) : (
         <>
-          <rect
-            x={documentCutout.x}
-            y={documentCutout.y}
-            width={documentCutout.width}
-            height={documentCutout.height}
-            rx={documentCutout.radius}
-            fill="transparent"
-            stroke="var(--lagoon)"
-            strokeOpacity="0.9"
-            strokeWidth="1.6"
-          />
-          {(
-            [
-              {
-                x: documentCutout.x,
-                y: documentCutout.y,
-                dirX: 1,
-                dirY: 1,
-              },
-              {
-                x: documentCutout.x + documentCutout.width,
-                y: documentCutout.y,
-                dirX: -1,
-                dirY: 1,
-              },
-              {
-                x: documentCutout.x,
-                y: documentCutout.y + documentCutout.height,
-                dirX: 1,
-                dirY: -1,
-              },
-              {
-                x: documentCutout.x + documentCutout.width,
-                y: documentCutout.y + documentCutout.height,
-                dirX: -1,
-                dirY: -1,
-              },
-            ] as const
-          ).map((c, index) => (
-            <path
-              key={index}
-              d={`M${c.x},${c.y} h${corner * c.dirX} M${c.x},${c.y} v${corner * c.dirY}`}
-              stroke="var(--lagoon)"
-              strokeOpacity="0.95"
-              strokeWidth={cornerStroke}
-              strokeLinecap="round"
-            />
-          ))}
+          {quadPath ? (
+            <>
+              <path
+                d={quadPath}
+                fill="transparent"
+                stroke="var(--lagoon)"
+                strokeOpacity="0.95"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+              />
+              {quadCornerStrokes?.map((d, index) => (
+                <path
+                  key={index}
+                  d={d}
+                  stroke="var(--lagoon)"
+                  strokeOpacity="0.95"
+                  strokeWidth={cornerStroke}
+                  strokeLinecap="round"
+                />
+              ))}
+            </>
+          ) : (
+            <>
+              <rect
+                x={documentCutout.x}
+                y={documentCutout.y}
+                width={documentCutout.width}
+                height={documentCutout.height}
+                rx={documentCutout.radius}
+                fill="transparent"
+                stroke="var(--lagoon)"
+                strokeOpacity="0.9"
+                strokeWidth="1.6"
+              />
+              {(
+                [
+                  {
+                    x: documentCutout.x,
+                    y: documentCutout.y,
+                    dirX: 1,
+                    dirY: 1,
+                  },
+                  {
+                    x: documentCutout.x + documentCutout.width,
+                    y: documentCutout.y,
+                    dirX: -1,
+                    dirY: 1,
+                  },
+                  {
+                    x: documentCutout.x,
+                    y: documentCutout.y + documentCutout.height,
+                    dirX: 1,
+                    dirY: -1,
+                  },
+                  {
+                    x: documentCutout.x + documentCutout.width,
+                    y: documentCutout.y + documentCutout.height,
+                    dirX: -1,
+                    dirY: -1,
+                  },
+                ] as const
+              ).map((c, index) => (
+                <path
+                  key={index}
+                  d={`M${c.x},${c.y} h${corner * c.dirX} M${c.x},${c.y} v${corner * c.dirY}`}
+                  stroke="var(--lagoon)"
+                  strokeOpacity="0.95"
+                  strokeWidth={cornerStroke}
+                  strokeLinecap="round"
+                />
+              ))}
+            </>
+          )}
           <path
             d={documentPath}
             fill="transparent"
@@ -1683,7 +2160,7 @@ function ReviewScreen({
   onEditDocument: () => void
 }) {
   return (
-    <div className="mt-6 grid gap-5 lg:grid-cols-2">
+    <div className="mt-6 mb-24 grid gap-5 lg:mb-0 lg:grid-cols-2">
       <div className="island-shell rounded-2xl p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
